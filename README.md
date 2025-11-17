@@ -7,8 +7,6 @@ Project Fyr is an agentic AI assistant that watches Kubernetes deployments, insp
 - **Slack Notifier** – built into the analyzer loop; formats summaries with severity, probable cause, and next steps.
 - **Helm chart** – deploys the watcher plus the GitLab ingestor with configurable commands/arguments, ConfigMap-driven settings, and optional RBAC.
 
-Design deep-dives live in `deploy_assistant_design_part_2.md` and `deploy_assistant_design_part_3.md`.
-
 ## Local Development
 
 ### Requirements
@@ -76,7 +74,3 @@ Key values:
 
 Mount production secrets via external `Secret` objects and reference them using `envFrom`/`extraEnv` patches if desired—the chart keeps ConfigMap values simple for local testing.
 
-## Next Steps
-
-- Wire migrations (e.g., Alembic) for MySQL/Postgres when leaving SQLite.
-- Integrate the provided design docs to split services or add more observability if your environment requires it.
