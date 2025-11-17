@@ -1,0 +1,5 @@
+apiVersion: v2
+name: project-fyr
+version: 0.1.0
+description: Project Fyr watcher + GitLab ingestor components
+appVersion: "0.1.0"
