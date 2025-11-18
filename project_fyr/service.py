@@ -79,25 +79,66 @@ def should_fail_early(signals: PodFailureSignals, min_pods: int = 1) -> bool:
 
 def rollout_metadata_dict(rollout) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
-    git = {
-        "project": getattr(rollout, "git_project", None),
-        "commit": getattr(rollout, "git_commit", None),
-        "pipeline_url": getattr(rollout, "pipeline_url", None),
-        "mr_url": getattr(rollout, "mr_url", None),
-    }
-    git = {k: v for k, v in git.items() if v}
-    if git:
-        metadata["git"] = git
-        if "pipeline_url" not in metadata and git.get("pipeline_url"):
-            metadata["pipeline_url"] = git["pipeline_url"]
-    if getattr(rollout, "team", None):
+    if rollout.team:
         metadata["team"] = rollout.team
     if rollout.metadata_json:
         metadata.update({k: v for k, v in rollout.metadata_json.items() if v is not None})
     return metadata
 
 
-def handle_deployment_event(dep, event_type: str, repo: RolloutRepo, cluster: str):
+ANNOTATION_SLACK_CHANNEL = "project-fyr/slack-channel"
+ANNOTATION_TEAM = "project-fyr/team"
+ANNOTATION_PREFIX = "project-fyr/"
+
+
+def parse_namespace_annotations(annotations: dict[str, str] | None) -> dict[str, Any]:
+    annotations = annotations or {}
+    namespace_specific = {k: v for k, v in annotations.items() if k.startswith(ANNOTATION_PREFIX)}
+    metadata: dict[str, Any] = {}
+    if namespace_specific:
+        metadata["metadata_json"] = {"namespace_annotations": namespace_specific}
+    if team := annotations.get(ANNOTATION_TEAM):
+        metadata["team"] = team
+    if channel := annotations.get(ANNOTATION_SLACK_CHANNEL):
+        metadata["slack_channel"] = channel
+    return metadata
+
+
+def fetch_namespace_metadata(core_v1: client.CoreV1Api, namespace: str) -> dict[str, Any]:
+    try:
+        ns = core_v1.read_namespace(namespace)
+    except Exception as exc:  # pragma: no cover - diagnostic path
+        print(f"namespace metadata error ({namespace}): {exc}")
+        return {}
+    return parse_namespace_annotations(getattr(ns.metadata, "annotations", None))
+
+
+class NamespaceMetadataCache:
+    def __init__(self, core_v1: client.CoreV1Api, ttl_seconds: int = 60):
+        self._core_v1 = core_v1
+        self._ttl = ttl_seconds
+        self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, namespace: str) -> dict[str, Any]:
+        now = time.time()
+        with self._lock:
+            entry = self._cache.get(namespace)
+            if entry and now - entry[0] < self._ttl:
+                return entry[1]
+        data = fetch_namespace_metadata(self._core_v1, namespace)
+        with self._lock:
+            self._cache[namespace] = (now, data)
+        return data
+
+
+def handle_deployment_event(
+    dep,
+    event_type: str,
+    repo: RolloutRepo,
+    cluster: str,
+    namespace_metadata: dict[str, Any] | None = None,
+):
     if event_type == "DELETED":
         return
 
@@ -108,6 +149,7 @@ def handle_deployment_event(dep, event_type: str, repo: RolloutRepo, cluster: st
     ns = dep.metadata.namespace
     name = dep.metadata.name
     generation = dep.metadata.generation or 1
+    ns_meta = namespace_metadata or {}
 
     rollout = repo.get_by_key(cluster, ns, name, generation)
     phase = evaluate_deployment_phase(dep)
@@ -123,10 +165,18 @@ def handle_deployment_event(dep, event_type: str, repo: RolloutRepo, cluster: st
             status=status,
             started_at=now,
             origin="k8s",
+            metadata_json=ns_meta.get("metadata_json") or {},
+            team=ns_meta.get("team"),
+            slack_channel=ns_meta.get("slack_channel"),
         )
     else:
-        # The reconcile loop will adjust statuses.
-        pass
+        if ns_meta:
+            repo.update_metadata(
+                rollout.id,
+                metadata_json=ns_meta.get("metadata_json"),
+                team=ns_meta.get("team"),
+                slack_channel=ns_meta.get("slack_channel"),
+            )
 
 
 def reconcile_rollout(
@@ -218,12 +268,11 @@ class AnalysisWorker:
             time.sleep(15)
 
 
-class ProjectFyrService:
+class WatcherService:
     def __init__(self, config: Settings | None = None):
         self._config = config or settings
         self._engine = init_db(self._config.database_url)
         self._repo = RolloutRepo(self._engine)
-        self._threads: list[threading.Thread] = []
 
     def start(self):
         try:
@@ -232,8 +281,7 @@ class ProjectFyrService:
             config.load_kube_config()
 
         cluster = self._config.k8s_cluster_name
-        analysis_worker = AnalysisWorker(self._repo, cluster, self._config)
-
+        threads: list[threading.Thread] = []
         watch_thread = threading.Thread(
             target=self._watch_loop,
             args=(cluster,),
@@ -246,17 +294,17 @@ class ProjectFyrService:
             daemon=True,
             name="project-fyr-reconcile",
         )
-        analysis_thread = threading.Thread(target=analysis_worker.loop, daemon=True, name="analysis")
-
-        self._threads.extend([watch_thread, reconcile_thread, analysis_thread])
-        for t in self._threads:
+        threads.extend([watch_thread, reconcile_thread])
+        for t in threads:
             t.start()
 
-        for t in self._threads:
+        for t in threads:
             t.join()
 
     def _watch_loop(self, cluster: str):
         v1_apps = client.AppsV1Api()
+        core_v1 = client.CoreV1Api()
+        namespace_cache = NamespaceMetadataCache(core_v1)
         w = watch.Watch()
         selector = "project-fyr/enabled=true"
         while True:
@@ -269,7 +317,8 @@ class ProjectFyrService:
                 for event in stream:
                     dep = event["object"]
                     etype = event["type"]
-                    handle_deployment_event(dep, etype, self._repo, cluster)
+                    ns_meta = namespace_cache.get(dep.metadata.namespace)
+                    handle_deployment_event(dep, etype, self._repo, cluster, namespace_metadata=ns_meta)
             except Exception as exc:
                 print(f"watch error: {exc}")
                 time.sleep(2)
@@ -291,8 +340,30 @@ class ProjectFyrService:
 
 
 def main():
-    service = ProjectFyrService()
+    service = WatcherService()
     service.start()
+
+
+class AnalyzerService:
+    def __init__(self, config: Settings | None = None):
+        self._config = config or settings
+        self._engine = init_db(self._config.database_url)
+        self._repo = RolloutRepo(self._engine)
+
+    def start(self):
+        worker = AnalysisWorker(self._repo, self._config.k8s_cluster_name, self._config)
+        worker.loop()
+
+
+def run_watcher():
+    WatcherService().start()
+
+
+def run_analyzer():
+    AnalyzerService().start()
+
+
+__all__ = ["WatcherService", "AnalyzerService", "run_watcher", "run_analyzer"]
 
 
 if __name__ == "__main__":  # pragma: no cover

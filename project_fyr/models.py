@@ -70,23 +70,3 @@ class Analysis(BaseModel):
     details: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-
-class GitContext(BaseModel):
-    project: str
-    commit: str
-    pipeline_url: str | None = None
-    mr_url: str | None = None
-
-
-class GitLabMetadata(BaseModel):
-    cluster: str
-    namespace: str
-    deployment: str
-    generation: int
-    git: GitContext
-    team: str | None = None
-    slack_channel: str | None = None
-
-
-class DeploymentNotifyRequest(GitLabMetadata):
-    """Request payload accepted by the GitLab ingestor service."""
