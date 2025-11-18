@@ -15,29 +15,6 @@ watcher:
   tolerations: []
   affinity: {}
 
-gitlabIngestor:
-  enabled: true
-  replicaCount: 1
-  image:
-    repository: ""
-    tag: ""
-    pullPolicy: ""
-  command:
-    - uvicorn
-    - project_fyr.gitlab_api:app
-    - --host
-    - 0.0.0.0
-    - --port
-    - "8080"
-  args: []
-  service:
-    type: ClusterIP
-    port: 8080
-  resources: {}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-
 serviceAccount:
   create: true
   name: ""
@@ -54,3 +31,20 @@ config:
   maxLogLines: 200
   reducerMaxEvents: 20
   reducerMaxClusters: 8
+
+secrets:
+  # Name of an existing Secret created by External Secret Operator that contains
+  # any PROJECT_FYR_* keys (e.g., Slack tokens, OpenAI API keys, DB credentials).
+  existingSecret: ""
+
+mysql:
+  enabled: false
+  architecture: standalone
+  auth:
+    rootPassword: ""
+    username: projectfyr
+    password: projectfyr
+    database: projectfyr
+  primary:
+    persistence:
+      enabled: false

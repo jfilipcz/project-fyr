@@ -35,6 +35,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "project-fyr.fullname" . }}
+            {{- if .Values.secrets.existingSecret }}
+            - secretRef:
+                name: {{ .Values.secrets.existingSecret }}
+            {{- end }}
           volumeMounts:
             - name: data
               mountPath: /data

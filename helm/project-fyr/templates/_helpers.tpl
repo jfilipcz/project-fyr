@@ -6,10 +6,6 @@
 {{- printf "%s-watcher" (include "project-fyr.fullname" .) -}}
 {{- end -}}
 
-{{- define "project-fyr.gitlabName" -}}
-{{- printf "%s-gitlab-ingestor" (include "project-fyr.fullname" .) -}}
-{{- end -}}
-
 {{- define "project-fyr.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}

@@ -32,8 +32,8 @@ class SlackNotifier:
 
     @staticmethod
     def _build_blocks(rollout_ref: str, analysis: Analysis, metadata: dict) -> list[dict]:
-        git_meta = metadata.get("git", {}) if isinstance(metadata, dict) else {}
-        pipeline_url = metadata.get("pipeline_url") or git_meta.get("pipeline_url")
+        metadata = metadata or {}
+        pipeline_url = metadata.get("pipeline_url")
         team = metadata.get("team")
         fields = [
             {"type": "mrkdwn", "text": f"*Rollout:* {rollout_ref}"},
@@ -57,4 +57,7 @@ class SlackNotifier:
         ]
         if analysis.details:
             blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": analysis.details}]})
+        if annotations := metadata.get("namespace_annotations"):
+            formatted = ", ".join(f"{k}={v}" for k, v in annotations.items())
+            blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"*Namespace annotations:* {formatted}"}]})
         return blocks

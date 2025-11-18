@@ -6,17 +6,10 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterator
 
-from sqlalchemy import JSON, Column, DateTime, Enum as SAEnum, Integer, String, create_engine, select, update
+from sqlalchemy import JSON, DateTime, Enum as SAEnum, Integer, String, create_engine, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from .models import (
-    Analysis,
-    AnalysisStatus,
-    DeploymentNotifyRequest,
-    NotifyStatus,
-    ReducedContext,
-    RolloutStatus,
-)
+from .models import Analysis, AnalysisStatus, NotifyStatus, ReducedContext, RolloutStatus
 
 
 class Base(DeclarativeBase):
@@ -44,10 +37,6 @@ class Rollout(Base):
     notify_status: Mapped[NotifyStatus] = mapped_column(
         SAEnum(NotifyStatus), default=NotifyStatus.PENDING
     )
-    git_project: Mapped[str | None] = mapped_column(String, nullable=True)
-    git_commit: Mapped[str | None] = mapped_column(String, nullable=True)
-    pipeline_url: Mapped[str | None] = mapped_column(String, nullable=True)
-    mr_url: Mapped[str | None] = mapped_column(String, nullable=True)
     team: Mapped[str | None] = mapped_column(String, nullable=True)
     slack_channel: Mapped[str | None] = mapped_column(String, nullable=True)
 
@@ -154,54 +143,24 @@ class RolloutRepo:
             )
             s.execute(status_stmt)
             s.commit()
-
-    def upsert_gitlab_metadata(self, payload: DeploymentNotifyRequest) -> Rollout:
-        """Persist GitLab metadata, creating a rollout row if needed."""
-        git = payload.git
-        git_fields = {
-            "git_project": git.project,
-            "git_commit": git.commit,
-            "pipeline_url": git.pipeline_url,
-            "mr_url": git.mr_url,
-        }
-        extra_fields = {
-            "team": payload.team,
-            "slack_channel": payload.slack_channel,
-        }
-        metadata_payload = {
-            "git": git.model_dump(),
-            "team": payload.team,
-            "slack_channel": payload.slack_channel,
-        }
+    def update_metadata(
+        self,
+        rollout_id: int,
+        *,
+        metadata_json: dict | None = None,
+        team: str | None = None,
+        slack_channel: str | None = None,
+    ) -> None:
+        values: dict = {}
+        if metadata_json is not None:
+            values["metadata_json"] = metadata_json
+        if team is not None:
+            values["team"] = team
+        if slack_channel is not None:
+            values["slack_channel"] = slack_channel
+        if not values:
+            return
+        stmt = update(Rollout).where(Rollout.id == rollout_id).values(**values)
         with self.session() as s:
-            stmt = select(Rollout).where(
-                Rollout.cluster == payload.cluster,
-                Rollout.namespace == payload.namespace,
-                Rollout.deployment == payload.deployment,
-                Rollout.generation == payload.generation,
-            )
-            rollout = s.scalars(stmt).first()
-            now = datetime.utcnow()
-            if rollout:
-                for field, value in {**git_fields, **extra_fields}.items():
-                    if value is not None:
-                        setattr(rollout, field, value)
-                metadata = rollout.metadata_json or {}
-                metadata.update({k: v for k, v in metadata_payload.items() if v is not None})
-                rollout.metadata_json = metadata
-            else:
-                rollout = Rollout(
-                    cluster=payload.cluster,
-                    namespace=payload.namespace,
-                    deployment=payload.deployment,
-                    generation=payload.generation,
-                    status=RolloutStatus.PENDING,
-                    started_at=now,
-                    origin="gitlab",
-                    metadata_json={k: v for k, v in metadata_payload.items() if v is not None},
-                    **{k: v for k, v in {**git_fields, **extra_fields}.items() if v is not None},
-                )
-                s.add(rollout)
+            s.execute(stmt)
             s.commit()
-            s.refresh(rollout)
-            return rollout

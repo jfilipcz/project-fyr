@@ -14,8 +14,6 @@ dependencies = [
     "langchain-openai>=0.0.8",
     "openai>=1.13",
     "slack_sdk>=3.27",
-    "fastapi>=0.110",
-    "uvicorn>=0.29",
     "tenacity>=8.2",
 ]
 
