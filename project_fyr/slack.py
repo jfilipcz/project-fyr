@@ -35,6 +35,8 @@ class SlackNotifier:
         metadata = metadata or {}
         pipeline_url = metadata.get("pipeline_url")
         team = metadata.get("team")
+        triage_team = metadata.get("triage_team") or getattr(analysis, "triage_team", None)
+        triage_reason = metadata.get("triage_reason") or getattr(analysis, "triage_reason", None)
         fields = [
             {"type": "mrkdwn", "text": f"*Rollout:* {rollout_ref}"},
             {"type": "mrkdwn", "text": f"*Severity:* {analysis.severity}"},
@@ -57,6 +59,11 @@ class SlackNotifier:
         ]
         if analysis.details:
             blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": analysis.details}]})
+        if triage_team:
+            triage_text = f"*Triage:* {triage_team}"
+            if triage_reason:
+                triage_text += f" — {triage_reason}"
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": triage_text}})
         if annotations := metadata.get("namespace_annotations"):
             formatted = ", ".join(f"{k}={v}" for k, v in annotations.items())
             blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"*Namespace annotations:* {formatted}"}]})

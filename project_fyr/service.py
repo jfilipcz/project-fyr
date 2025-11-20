@@ -18,6 +18,7 @@ from .db import RolloutRepo, init_db
 from .models import RolloutStatus
 from .reducer import ContextReducer
 from .slack import SlackNotifier
+from .triage import triage_failure
 
 
 def evaluate_deployment_phase(dep) -> str:
@@ -248,7 +249,16 @@ class AnalysisWorker:
                     raw = self._collector.collect(rollout.namespace, rollout.deployment)
                     reduced = self._reducer.reduce(raw)
                     analysis = self._analyzer.analyze(reduced)
+                    triage = triage_failure(reduced, analysis)
+                    analysis.triage_team = triage.team
+                    analysis.triage_reason = triage.reason
                     metadata = rollout_metadata_dict(rollout)
+                    metadata.update(
+                        {
+                            "triage_team": triage.team,
+                            "triage_reason": triage.reason,
+                        }
+                    )
                     channel = rollout.slack_channel
                     rollout_ref = f"{rollout.namespace}/{rollout.deployment}#{rollout.generation}"
                     self._slack.send_analysis(

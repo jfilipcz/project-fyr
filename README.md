@@ -5,6 +5,7 @@ Project Fyr is an agentic AI assistant that watches Kubernetes deployments, insp
 - **Watcher/Analyzer** – streams deployment events, captures rollout context (pods, events, logs) and runs the LangChain-based analyzer.
 - **Slack Notifier** – built into the analyzer loop; formats summaries with severity, probable cause, and next steps.
 - **Namespace annotations** – opt-in metadata (Slack channel, owning team, etc.) stored on the Kubernetes namespace and automatically picked up per rollout.
+- **Triage helper** – simple heuristics that suggest whether infra, security, or application teams should investigate the failure next.
 - **Helm chart** – deploys the watcher/analyzer with configurable commands/arguments, ConfigMap-driven settings, and optional RBAC.
 
 ## Local Development
@@ -28,6 +29,15 @@ Two Dockerfiles are available:
 - `Dockerfile` – watcher/reconciler service (`python -m project_fyr.watcher_service`).
 - `Dockerfile.analyzer` – analyzer/slack notifier loop (`python -m project_fyr.analyzer_service`).
 
+You can also use the provided `Makefile`:
+
+```bash
+make build-watcher TAG=dev
+make build-analyzer TAG=dev
+# cross-compile + push to registry
+make push-watcher TAG=1.0.0 REGISTRY=ghcr.io/my-org PLATFORM=linux/amd64
+```
+
 Example build/run:
 
 ```bash
@@ -47,6 +57,22 @@ docker run --rm --name analyzer \
 ```
 
 Override environment variables (or inject secrets) to point at your production database and tokens.
+
+#### Building explicit x86_64 images
+
+Use `docker buildx` (or an equivalent builder) to force `linux/amd64` output even on Apple Silicon:
+
+```bash
+docker buildx build --platform linux/amd64 \
+  -f Dockerfile \
+  -t ghcr.io/example/project-fyr-watcher:amd64 .
+
+docker buildx build --platform linux/amd64 \
+  -f Dockerfile.analyzer \
+  -t ghcr.io/example/project-fyr-analyzer:amd64 .
+```
+
+Add `--push` to publish to your registry once the builds succeed.
 
 Run the watcher service (defaults to SQLite file `project_fyr.db`):
 ```bash
@@ -145,3 +171,12 @@ helm upgrade --install project-fyr ./helm/project-fyr -f dev-values.yaml
 
 The dependency is disabled by default; in production you should continue pointing `PROJECT_FYR_DATABASE_URL` at your managed database and rely on `secrets.existingSecret` (ESO) to mount credentials.
 
+## Triage heuristics
+
+After the analyzer produces its summary, a lightweight heuristic classifier labels each failure with a next-investigator team:
+
+- **application** – default when no infra/security signals are found.
+- **infra** – scheduling/resource/network/storage issues (keywords such as `FailedScheduling`, `Insufficient`, `CNI`, `PersistentVolume`).
+- **security** – permission/secret/TLS problems (keywords such as `Forbidden`, `Unauthorized`, `certificate`, `secret`).
+
+The triage team and rationale are included in the Slack notification metadata. Extend `project_fyr/triage.py` if you need richer routing or additional teams.

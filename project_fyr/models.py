@@ -69,4 +69,5 @@ class Analysis(BaseModel):
     severity: str = Field(default="medium")
     details: str | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
-
+    triage_team: str | None = None
+    triage_reason: str | None = None
