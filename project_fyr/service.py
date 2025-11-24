@@ -224,6 +224,7 @@ class AnalysisWorker:
     def __init__(self, repo: RolloutRepo, cluster: str, config: Settings):
         self._repo = repo
         self._cluster = cluster
+        self._config = config
         self._collector = RawContextCollector(
             log_tail_seconds=config.log_tail_seconds,
             max_log_lines=config.max_log_lines,
