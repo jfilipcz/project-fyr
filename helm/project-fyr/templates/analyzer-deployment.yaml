@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "project-fyr.analyzerName" . }}
+  labels:
+    {{- include "project-fyr.labels" . | nindent 4 }}
+    app.kubernetes.io/name: project-fyr
+    app.kubernetes.io/component: analyzer
+spec:
+  replicas: {{ .Values.analyzer.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: analyzer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: analyzer
+        app.kubernetes.io/name: project-fyr
+    spec:
+      serviceAccountName: {{ default (printf "%s-sa" .Release.Name) .Values.serviceAccount.name }}
+      containers:
+        - name: analyzer
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.analyzer.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.analyzer.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "project-fyr.fullname" . }}
+            {{- if .Values.secrets.existingSecret }}
+            - secretRef:
+                name: {{ .Values.secrets.existingSecret }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.analyzer.resources | nindent 12 }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- with .Values.analyzer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.analyzer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.analyzer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

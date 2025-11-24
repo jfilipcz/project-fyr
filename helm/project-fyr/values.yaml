@@ -15,6 +15,18 @@ watcher:
   tolerations: []
   affinity: {}
 
+analyzer:
+  replicaCount: 1
+  command:
+    - python
+    - -m
+    - project_fyr.analyzer_service
+  args: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 serviceAccount:
   create: true
   name: ""
