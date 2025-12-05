@@ -89,7 +89,7 @@ class RawContextCollector:
         label_selector = ",".join([f"{k}={v}" for k, v in selector.items()])
         pods = self._core.list_namespaced_pod(namespace, label_selector=label_selector)
         now = datetime.utcnow()
-        events = self._events.list_namespaced_event(namespace, field_selector=f"regarding.name={deployment_name}")
+        events = self._core.list_namespaced_event(namespace, field_selector=f"involvedObject.name={deployment_name}")
 
         pod_dicts = [self._api_client.sanitize_for_serialization(p) for p in pods.items]
         event_dicts = [self._api_client.sanitize_for_serialization(e) for e in events.items]

@@ -128,6 +128,12 @@ class RolloutRepo:
             s.execute(stmt)
             s.commit()
 
+    def update_notify_status(self, rollout_id: int, new_status: NotifyStatus) -> None:
+        stmt = update(Rollout).where(Rollout.id == rollout_id).values(notify_status=new_status)
+        with self.session() as s:
+            s.execute(stmt)
+            s.commit()
+
     def append_analysis(
         self,
         rollout_id: int,
@@ -142,8 +148,8 @@ class RolloutRepo:
                 rollout_id=rollout_id,
                 model_name=model_name,
                 prompt_version=prompt_version,
-                reduced_context=reduced_context.model_dump(),
-                analysis=analysis.model_dump(),
+                reduced_context=reduced_context.model_dump(mode="json"),
+                analysis=analysis.model_dump(mode="json"),
             )
             s.add(record)
             s.flush()
