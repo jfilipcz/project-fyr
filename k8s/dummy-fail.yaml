@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fyr-dummy-fail
+  namespace: default
+  labels:
+    project-fyr/enabled: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fyr-dummy-fail
+  template:
+    metadata:
+      labels:
+        app: fyr-dummy-fail
+    spec:
+      containers:
+      - name: busybox
+        image: busybox:nonexistent-tag-to-force-failure
+        command: ["sh", "-c", "sleep 3600"]

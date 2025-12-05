@@ -1,13 +1,12 @@
-"""Standalone entrypoint for the Project Fyr analyzer."""
+"""Entry point for the analyzer service."""
 
 from __future__ import annotations
 
-from .service import run_analyzer
+import logging
+from .service import AnalyzerService
 
+logger = logging.getLogger(__name__)
 
-def main():
-    run_analyzer()
-
-
-if __name__ == "__main__":  # pragma: no cover
-    main()
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
+    AnalyzerService().start()

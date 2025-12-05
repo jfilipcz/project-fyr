@@ -6,6 +6,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from kubernetes import client, config, watch
@@ -15,18 +16,24 @@ from .analyzer import Analyzer
 from .config import Settings, settings
 from .context import RawContextCollector
 from .db import RolloutRepo, init_db
-from .models import RolloutStatus
+from .models import NotifyStatus, RolloutStatus
 from .reducer import ContextReducer
 from .slack import SlackNotifier
 from .triage import triage_failure
 
 
+logger = logging.getLogger(__name__)
+
+
 def evaluate_deployment_phase(dep) -> str:
-    status = dep.status or {}
-    available = getattr(status, "available_replicas", None) or status.get("available_replicas")
-    desired = dep.spec.replicas or 0
-    conditions = {c.type: c.status for c in (status.conditions or [])}
-    if available and available >= desired and desired > 0:
+    """Map a Deployment status object to a coarse rollout phase."""
+
+    status = dep.status or None
+    available = getattr(status, "available_replicas", None) or getattr(status, "availableReplicas", None)
+    desired = getattr(dep.spec, "replicas", 0) or 0
+    conditions = {c.type: c.status for c in (getattr(status, "conditions", []) or [])}
+
+    if available is not None and desired > 0 and available >= desired:
         return "STABLE"
     if conditions.get("Progressing") == "False":
         return "FAILED_PROGRESS"
@@ -109,7 +116,7 @@ def fetch_namespace_metadata(core_v1: client.CoreV1Api, namespace: str) -> dict[
     try:
         ns = core_v1.read_namespace(namespace)
     except Exception as exc:  # pragma: no cover - diagnostic path
-        print(f"namespace metadata error ({namespace}): {exc}")
+        logger.error(f"namespace metadata error ({namespace}): {exc}")
         return {}
     return parse_namespace_annotations(getattr(ns.metadata, "annotations", None))
 
@@ -197,7 +204,7 @@ def reconcile_rollout(
             pods = list_deployment_pods(core_v1, dep)
             signals = analyze_pod_failures(pods)
         except Exception as exc:  # pragma: no cover - diagnostic path
-            print(f"pod analysis error: {exc}")
+            logger.error(f"pod analysis error: {exc}")
         else:
             if should_fail_early(signals, min_pods=1):
                 repo.update_status(rollout.id, RolloutStatus.FAILED, failed_at=now)
@@ -240,6 +247,7 @@ class AnalysisWorker:
         self._slack = SlackNotifier(
             token=config.slack_bot_token,
             default_channel=config.slack_default_channel,
+            mock_log_file=config.slack_mock_log_file,
         )
 
     def loop(self):
@@ -248,7 +256,9 @@ class AnalysisWorker:
             for rollout in rollouts:
                 try:
                     raw = self._collector.collect(rollout.namespace, rollout.deployment)
+                    logger.debug(f"Raw context: {raw}")
                     reduced = self._reducer.reduce(raw)
+                    logger.debug(f"Reduced context: {reduced}")
                     analysis = self._analyzer.analyze(reduced)
                     triage = triage_failure(reduced, analysis)
                     analysis.triage_team = triage.team
@@ -262,11 +272,14 @@ class AnalysisWorker:
                     )
                     channel = rollout.slack_channel
                     rollout_ref = f"{rollout.namespace}/{rollout.deployment}#{rollout.generation}"
-                    self._slack.send_analysis(
+                    sent = self._slack.send_analysis(
                         channel=channel,
                         rollout_ref=rollout_ref,
                         analysis=analysis,
                         metadata=metadata,
+                    )
+                    self._repo.update_notify_status(
+                        rollout.id, NotifyStatus.SENT if sent else NotifyStatus.FAILED
                     )
                     self._repo.append_analysis(
                         rollout.id,
@@ -275,7 +288,7 @@ class AnalysisWorker:
                         model_name=self._config.langchain_model_name,
                     )
                 except Exception as exc:  # pragma: no cover - diagnostic path
-                    print(f"analysis loop error: {exc}")
+                    logger.error(f"analysis loop error: {exc}")
             time.sleep(15)
 
 
@@ -288,8 +301,10 @@ class WatcherService:
     def start(self):
         try:
             config.load_incluster_config()
+            logger.info("Loaded in-cluster config")
         except ConfigException:
             config.load_kube_config()
+            logger.info("Loaded kube config")
 
         cluster = self._config.k8s_cluster_name
         threads: list[threading.Thread] = []
@@ -331,7 +346,7 @@ class WatcherService:
                     ns_meta = namespace_cache.get(dep.metadata.namespace)
                     handle_deployment_event(dep, etype, self._repo, cluster, namespace_metadata=ns_meta)
             except Exception as exc:
-                print(f"watch error: {exc}")
+                logger.error(f"watch error: {exc}")
                 time.sleep(2)
 
     def _reconcile_loop(self, cluster: str):
@@ -346,11 +361,12 @@ class WatcherService:
                     dep = v1_apps.read_namespaced_deployment(rollout.deployment, rollout.namespace)
                     reconcile_rollout(dep, rollout, now, self._repo, timeout, core_v1=core_v1)
                 except Exception as exc:
-                    print(f"reconcile error: {exc}")
+                    logger.error(f"reconcile error: {exc}")
             time.sleep(10)
 
 
 def main():
+    logging.basicConfig(level=logging.DEBUG)
     service = WatcherService()
     service.start()
 
@@ -362,6 +378,13 @@ class AnalyzerService:
         self._repo = RolloutRepo(self._engine)
 
     def start(self):
+        try:
+            config.load_incluster_config()
+            logger.info("Analyzer loaded in-cluster config")
+        except ConfigException:
+            config.load_kube_config()
+            logger.info("Analyzer loaded kube config")
+
         worker = AnalysisWorker(self._repo, self._config.k8s_cluster_name, self._config)
         worker.loop()
 

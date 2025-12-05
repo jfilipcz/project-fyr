@@ -1,0 +1,35 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "project-fyr.fullname" . }}-watcher
+  labels:
+    {{- include "project-fyr.labels" . | nindent 4 }}
+    app.kubernetes.io/name: project-fyr
+    app.kubernetes.io/component: watcher
+rules:
+  # Watch deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read pods for failure analysis
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  
+  # Read pod logs
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  
+  # Read events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
+  
+  # Read namespace metadata (for annotations)
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
+{{- end }}

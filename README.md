@@ -141,6 +141,7 @@ Key values:
 - `watcher.*` – replica count, command/args, scheduling hints for the watcher.
 - `config.*` – populates the ConfigMap consumed by the watcher, covering every `PROJECT_FYR_*` setting.
 - `serviceAccount.*` – watcher RBAC identity (set `create=false` + `name` to reuse an existing SA bound to the necessary cluster roles).
+- `rbac.create` – automatically create ClusterRole and ClusterRoleBinding with required permissions (default: `true`).
 - `secrets.existingSecret` – reference to a Secret managed by External Secret Operator (or any other controller) that injects sensitive `PROJECT_FYR_*` values.
 
 Mount production secrets via external `Secret` objects and reference them using `envFrom`/`extraEnv` patches if desired—the chart keeps ConfigMap values simple for local testing. Namespace annotations control Slack routing/metadata instead of a dedicated GitLab service.
