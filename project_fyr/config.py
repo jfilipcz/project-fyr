@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     max_log_lines: int = Field(default=200)
     reducer_max_events: int = Field(default=20)
     reducer_max_clusters: int = Field(default=8)
+    slack_mock_log_file: str | None = Field(default=None)
 
     class Config:
         env_prefix = "PROJECT_FYR_"

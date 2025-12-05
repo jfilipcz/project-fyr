@@ -31,6 +31,9 @@ serviceAccount:
   create: true
   name: ""
 
+rbac:
+  create: true
+
 config:
   databaseUrl: sqlite:////data/project_fyr.db
   clusterName: ci-cluster
