@@ -60,9 +60,19 @@ def _summarize_events(events: Iterable[dict], limit: int) -> list[EventSummary]:
 
     summaries: list[EventSummary] = []
     for reason, records in grouped.items():
-        template_counter = Counter(r.get("note") for r in records)
+        template_counter = Counter(r.get("note") or "" for r in records)
         template, count = template_counter.most_common(1)[0]
-        last_timestamp = max((r.get("eventTime") or r.get("deprecatedLastTimestamp")) for r in records)
+
+        timestamps = [
+            r.get("eventTime")
+            or r.get("deprecatedLastTimestamp")
+            or r.get("lastTimestamp")
+            for r in records
+            if r.get("eventTime") or r.get("deprecatedLastTimestamp") or r.get("lastTimestamp")
+        ]
+        if not timestamps:
+            continue  # skip events lacking a usable timestamp when operating strictly
+        last_timestamp = max(timestamps)
         summaries.append(
             EventSummary(
                 reason=reason,
