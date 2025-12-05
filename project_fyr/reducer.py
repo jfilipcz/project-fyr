@@ -100,4 +100,5 @@ class ContextReducer:
             failing_pods=failing,
             log_clusters=log_clusters,
             events=events,
+            argocd_status=raw.argocd_app.get("status") if raw.argocd_app else None,
         )
