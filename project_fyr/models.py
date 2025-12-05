@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -41,7 +41,7 @@ class LogCluster(BaseModel):
     template: str
     example: str
     count: int
-    last_timestamp: str | None = None
+    last_timestamp: Optional[str] = None
 
 
 class EventSummary(BaseModel):
@@ -67,7 +67,7 @@ class Analysis(BaseModel):
     likely_cause: str
     recommended_steps: list[str]
     severity: str = Field(default="medium")
-    details: str | None = None
+    details: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    triage_team: str | None = None
-    triage_reason: str | None = None
+    triage_team: Optional[str] = None
+    triage_reason: Optional[str] = None

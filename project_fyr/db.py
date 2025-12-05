@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Iterator
+from typing import Iterator, Optional
 
 from sqlalchemy import JSON, DateTime, Enum as SAEnum, Integer, String, create_engine, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
@@ -25,20 +25,20 @@ class Rollout(Base):
     deployment: Mapped[str] = mapped_column(String, index=True)
     generation: Mapped[int] = mapped_column(Integer, index=True)
     status: Mapped[str] = mapped_column(SAEnum(RolloutStatus), default=RolloutStatus.PENDING)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    failed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     origin: Mapped[str] = mapped_column(String, default="k8s")
-    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSON, default=dict)
-    analysis_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column("metadata", JSON, default=dict)
+    analysis_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     analysis_status: Mapped[AnalysisStatus] = mapped_column(
         SAEnum(AnalysisStatus), default=AnalysisStatus.PENDING
     )
     notify_status: Mapped[NotifyStatus] = mapped_column(
         SAEnum(NotifyStatus), default=NotifyStatus.PENDING
     )
-    team: Mapped[str | None] = mapped_column(String, nullable=True)
-    slack_channel: Mapped[str | None] = mapped_column(String, nullable=True)
+    team: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    slack_channel: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
 
 class AnalysisRecord(Base):
@@ -76,7 +76,7 @@ class RolloutRepo:
             s.refresh(rollout)
         return rollout
 
-    def get_by_key(self, cluster: str, namespace: str, deployment: str, generation: int) -> Rollout | None:
+    def get_by_key(self, cluster: str, namespace: str, deployment: str, generation: int) -> Optional[Rollout]:
         stmt = select(Rollout).where(
             Rollout.cluster == cluster,
             Rollout.namespace == namespace,
@@ -102,6 +102,21 @@ class RolloutRepo:
         )
         with self.session() as s:
             return list(s.scalars(stmt))
+
+    def list_recent(self, limit: int = 50) -> list[Rollout]:
+        stmt = select(Rollout).order_by(Rollout.id.desc()).limit(limit)
+        with self.session() as s:
+            return list(s.scalars(stmt))
+
+    def get_by_id(self, rollout_id: int) -> Optional[Rollout]:
+        stmt = select(Rollout).where(Rollout.id == rollout_id)
+        with self.session() as s:
+            return s.scalars(stmt).first()
+
+    def get_analysis(self, analysis_id: int) -> Optional[AnalysisRecord]:
+        stmt = select(AnalysisRecord).where(AnalysisRecord.id == analysis_id)
+        with self.session() as s:
+            return s.scalars(stmt).first()
 
     def update_status(self, rollout_id: int, new_status: RolloutStatus, **timestamps) -> None:
         stmt = (
@@ -147,9 +162,9 @@ class RolloutRepo:
         self,
         rollout_id: int,
         *,
-        metadata_json: dict | None = None,
-        team: str | None = None,
-        slack_channel: str | None = None,
+        metadata_json: Optional[dict] = None,
+        team: Optional[str] = None,
+        slack_channel: Optional[str] = None,
     ) -> None:
         values: dict = {}
         if metadata_json is not None:
