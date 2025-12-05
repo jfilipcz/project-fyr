@@ -1,5 +1,6 @@
 """Settings for the Project Fyr service."""
 
+from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -9,9 +10,9 @@ class Settings(BaseSettings):
         default="sqlite:///./project_fyr.db",
         description="SQLAlchemy database URL",
     )
-    slack_bot_token: str | None = Field(default=None)
-    slack_default_channel: str | None = Field(default=None)
-    openai_api_key: str | None = Field(default=None)
+    slack_bot_token: Optional[str] = Field(default=None)
+    slack_default_channel: Optional[str] = Field(default=None)
+    openai_api_key: Optional[str] = Field(default=None)
     langchain_model_name: str = Field(default="gpt-4o-mini")
     k8s_cluster_name: str = Field(default="ci-cluster")
     rollout_timeout_seconds: int = Field(default=15 * 60)

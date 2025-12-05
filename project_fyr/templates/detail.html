@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rollout #{{ rollout.id }} - Project Fyr</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f4f4f9;
+            color: #333;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            margin-top: 0;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 15px;
+        }
+
+        .meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .meta-item {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .meta-label {
+            font-size: 0.85em;
+            color: #666;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .meta-value {
+            font-weight: 500;
+        }
+
+        .analysis-section {
+            margin-top: 30px;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }
+
+        .analysis-box {
+            background: #fff3cd;
+            border: 1px solid #ffeeba;
+            padding: 20px;
+            border-radius: 4px;
+            color: #856404;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #666;
+        }
+
+        pre {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <a href="/" class="back-link">&larr; Back to Dashboard</a>
+        <h1>Rollout #{{ rollout.id }}</h1>
+
+        <div class="meta">
+            <div class="meta-item">
+                <span class="meta-label">Cluster</span>
+                <span class="meta-value">{{ rollout.cluster }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Namespace</span>
+                <span class="meta-value">{{ rollout.namespace }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Deployment</span>
+                <span class="meta-value">{{ rollout.deployment }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Status</span>
+                <span class="meta-value">{{ rollout.status }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Started At</span>
+                <span class="meta-value">{{ rollout.started_at }}</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">Team</span>
+                <span class="meta-value">{{ rollout.team or 'N/A' }}</span>
+            </div>
+        </div>
+
+        {% if analysis %}
+        <div class="analysis-section">
+            <h2>Analysis</h2>
+            <div class="analysis-box">
+                <h3>Summary</h3>
+                <p>{{ analysis.summary }}</p>
+
+                <h4>Severity</h4>
+                <p>{{ analysis.severity }}</p>
+
+                <h4>Probable Cause</h4>
+                <p>{{ analysis.probable_cause }}</p>
+
+                <h4>Remediation</h4>
+                <p>{{ analysis.remediation }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if rollout.metadata_json %}
+        <div class="analysis-section">
+            <h2>Metadata</h2>
+            <pre>{{ rollout.metadata_json }}</pre>
+        </div>
+        {% endif %}
+    </div>
+</body>
+
+</html>

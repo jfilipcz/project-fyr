@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Fyr Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; background: #f4f4f9; color: #333; }
+        h1 { margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background-color: #f8f9fa; font-weight: 600; }
+        tr:hover { background-color: #f1f1f1; }
+        .status { padding: 4px 8px; border-radius: 4px; font-size: 0.85em; font-weight: 500; }
+        .status-success { background: #d4edda; color: #155724; }
+        .status-failed { background: #f8d7da; color: #721c24; }
+        .status-rolling-out { background: #cce5ff; color: #004085; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        a { text-decoration: none; color: #007bff; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <h1>Project Fyr Rollouts</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Cluster</th>
+                <th>Namespace</th>
+                <th>Deployment</th>
+                <th>Status</th>
+                <th>Started At</th>
+                <th>Team</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for rollout in rollouts %}
+            <tr>
+                <td>{{ rollout.id }}</td>
+                <td>{{ rollout.cluster }}</td>
+                <td>{{ rollout.namespace }}</td>
+                <td>{{ rollout.deployment }}</td>
+                <td>
+                    <span class="status status-{{ rollout.status.lower().replace('_', '-') }}">
+                        {{ rollout.status }}
+                    </span>
+                </td>
+                <td>{{ rollout.started_at }}</td>
+                <td>{{ rollout.team or '-' }}</td>
+                <td><a href="/rollout/{{ rollout.id }}">View Details</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>

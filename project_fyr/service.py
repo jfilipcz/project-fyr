@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import datetime, timedelta
@@ -23,7 +24,9 @@ from .triage import triage_failure
 
 def evaluate_deployment_phase(dep) -> str:
     status = dep.status or {}
-    available = getattr(status, "available_replicas", None) or status.get("available_replicas")
+    available = getattr(status, "available_replicas", None)
+    if available is None:
+        available = status.get("available_replicas")
     desired = dep.spec.replicas or 0
     conditions = {c.type: c.status for c in (status.conditions or [])}
     if available and available >= desired and desired > 0:
@@ -109,7 +112,7 @@ def fetch_namespace_metadata(core_v1: client.CoreV1Api, namespace: str) -> dict[
     try:
         ns = core_v1.read_namespace(namespace)
     except Exception as exc:  # pragma: no cover - diagnostic path
-        print(f"namespace metadata error ({namespace}): {exc}")
+        logging.error(f"namespace metadata error ({namespace}): {exc}")
         return {}
     return parse_namespace_annotations(getattr(ns.metadata, "annotations", None))
 
@@ -197,7 +200,7 @@ def reconcile_rollout(
             pods = list_deployment_pods(core_v1, dep)
             signals = analyze_pod_failures(pods)
         except Exception as exc:  # pragma: no cover - diagnostic path
-            print(f"pod analysis error: {exc}")
+            logging.error(f"pod analysis error: {exc}")
         else:
             if should_fail_early(signals, min_pods=1):
                 repo.update_status(rollout.id, RolloutStatus.FAILED, failed_at=now)
@@ -275,7 +278,7 @@ class AnalysisWorker:
                         model_name=self._config.langchain_model_name,
                     )
                 except Exception as exc:  # pragma: no cover - diagnostic path
-                    print(f"analysis loop error: {exc}")
+                    logging.error(f"analysis loop error: {exc}")
             time.sleep(15)
 
 
@@ -331,7 +334,7 @@ class WatcherService:
                     ns_meta = namespace_cache.get(dep.metadata.namespace)
                     handle_deployment_event(dep, etype, self._repo, cluster, namespace_metadata=ns_meta)
             except Exception as exc:
-                print(f"watch error: {exc}")
+                logging.error(f"watch error: {exc}")
                 time.sleep(2)
 
     def _reconcile_loop(self, cluster: str):
@@ -346,11 +349,12 @@ class WatcherService:
                     dep = v1_apps.read_namespaced_deployment(rollout.deployment, rollout.namespace)
                     reconcile_rollout(dep, rollout, now, self._repo, timeout, core_v1=core_v1)
                 except Exception as exc:
-                    print(f"reconcile error: {exc}")
+                    logging.error(f"reconcile error: {exc}")
             time.sleep(10)
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     service = WatcherService()
     service.start()
 
