@@ -33,6 +33,7 @@ class RawContext(BaseModel):
     pods: list[dict[str, Any]]
     events: list[dict[str, Any]]
     logs: dict[str, list[str]]
+    argocd_app: Optional[dict[str, Any]] = None
 
 
 class LogCluster(BaseModel):
@@ -60,6 +61,7 @@ class ReducedContext(BaseModel):
     failing_pods: list[str]
     log_clusters: list[LogCluster]
     events: list[EventSummary]
+    argocd_status: Optional[dict[str, Any]] = None
 
 
 class Analysis(BaseModel):
