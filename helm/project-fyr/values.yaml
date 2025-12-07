@@ -42,10 +42,7 @@ config:
   slackDefaultChannel: ""
   openaiApiKey: ""
   langchainModelName: gpt-4o-mini
-  logTailSeconds: 300
-  maxLogLines: 200
-  reducerMaxEvents: 20
-  reducerMaxClusters: 8
+  langchainModelName: gpt-4o-mini
 
 secrets:
   # Name of an existing Secret created by External Secret Operator that contains
