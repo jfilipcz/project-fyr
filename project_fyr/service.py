@@ -13,12 +13,10 @@ from typing import Any
 from kubernetes import client, config, watch
 from kubernetes.config.config_exception import ConfigException
 
-from .analyzer import Analyzer
+from .agent import InvestigatorAgent
 from .config import Settings, settings
-from .context import RawContextCollector
 from .db import RolloutRepo, init_db
-from .models import NotifyStatus, RolloutStatus
-from .reducer import ContextReducer
+from .models import NotifyStatus, ReducedContext, RolloutStatus
 from .slack import SlackNotifier
 from .triage import triage_failure
 
@@ -233,15 +231,7 @@ class AnalysisWorker:
         self._repo = repo
         self._cluster = cluster
         self._config = config
-        self._collector = RawContextCollector(
-            log_tail_seconds=config.log_tail_seconds,
-            max_log_lines=config.max_log_lines,
-        )
-        self._reducer = ContextReducer(
-            max_events=config.reducer_max_events,
-            max_clusters=config.reducer_max_clusters,
-        )
-        self._analyzer = Analyzer(
+        self._agent = InvestigatorAgent(
             model_name=config.langchain_model_name,
             api_key=config.openai_api_key,
         )
@@ -256,14 +246,30 @@ class AnalysisWorker:
             rollouts = self._repo.list_failed(self._cluster)
             for rollout in rollouts:
                 try:
-                    raw = self._collector.collect(rollout.namespace, rollout.deployment)
-                    logger.debug(f"Raw context: {raw}")
-                    reduced = self._reducer.reduce(raw)
-                    logger.debug(f"Reduced context: {reduced}")
-                    analysis = self._analyzer.analyze(reduced)
+                    logger.info(f"Starting investigation for {rollout.namespace}/{rollout.deployment}")
+                    
+                    # Agentic investigation
+                    analysis = self._agent.investigate(rollout.deployment, rollout.namespace)
+                    
+                    # Create a dummy ReducedContext for DB compatibility
+                    # The agent pulls data dynamically, so we don't have a static reduced context to store.
+                    # We store a placeholder to satisfy the schema.
+                    reduced = ReducedContext(
+                        namespace=rollout.namespace,
+                        deployment=rollout.deployment,
+                        generation=rollout.generation,
+                        summary="Agentic Investigation",
+                        phase="FAILED", # Assumed since we are processing failed rollouts
+                        failing_pods=[],
+                        log_clusters=[],
+                        events=[],
+                        argocd_status=None,
+                    )
+
                     triage = triage_failure(reduced, analysis)
                     analysis.triage_team = triage.team
                     analysis.triage_reason = triage.reason
+                    
                     metadata = rollout_metadata_dict(rollout)
                     metadata.update(
                         {
@@ -271,17 +277,21 @@ class AnalysisWorker:
                             "triage_reason": triage.reason,
                         }
                     )
+                    
                     channel = rollout.slack_channel
                     rollout_ref = f"{rollout.namespace}/{rollout.deployment}#{rollout.generation}"
+                    
                     sent = self._slack.send_analysis(
                         channel=channel,
                         rollout_ref=rollout_ref,
                         analysis=analysis,
                         metadata=metadata,
                     )
+                    
                     self._repo.update_notify_status(
                         rollout.id, NotifyStatus.SENT if sent else NotifyStatus.FAILED
                     )
+                    
                     self._repo.append_analysis(
                         rollout.id,
                         reduced_context=reduced,
