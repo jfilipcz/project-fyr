@@ -2,18 +2,19 @@
 
 Project Fyr is an agentic AI assistant that watches Kubernetes deployments, inspects failures, enriches them using namespace annotations, and posts concise guidance to Slack. It contains:
 
-- **Watcher/Analyzer** – streams deployment events, captures rollout context (pods, events, logs) and runs the LangChain-based analyzer.
-- **Slack Notifier** – built into the analyzer loop; formats summaries with severity, probable cause, and next steps.
-- **Namespace annotations** – opt-in metadata (Slack channel, owning team, etc.) stored on the Kubernetes namespace and automatically picked up per rollout.
-- **Triage helper** – simple heuristics that suggest whether infra, security, or application teams should investigate the failure next.
-- **Helm chart** – deploys the watcher/analyzer with configurable commands/arguments, ConfigMap-driven settings, and optional RBAC.
+- **Watcher** – streams deployment events and tracks rollout status.
+- **Investigator Agent** – an autonomous LangChain agent that investigates failures by actively querying the cluster (Pods, Events, Logs, ArgoCD, Helm).
+- **Slack Notifier** – posts the agent's analysis (summary, root cause, remediation) to Slack.
+- **Namespace annotations** – opt-in metadata (Slack channel, owning team, etc.) stored on the Kubernetes namespace.
+- **Triage helper** – heuristics to suggest the responsible team (infra, security, application).
+- **Helm chart** – deploys the watcher/analyzer with configurable settings.
 
 ## Local Development
 
 ### Requirements
 - Python 3.10+
 - SQLite (default) or another SQLAlchemy-compatible database URL
-- Access to a Kubernetes cluster/context for the watcher
+- Access to a Kubernetes cluster/context
 
 ### Setup
 ```bash
@@ -27,7 +28,7 @@ pip install -e '.[dev]'
 Two Dockerfiles are available:
 
 - `Dockerfile` – watcher/reconciler service (`python -m project_fyr.watcher_service`).
-- `Dockerfile.analyzer` – analyzer/slack notifier loop (`python -m project_fyr.analyzer_service`).
+- `Dockerfile.analyzer` – analyzer/agent service (`python -m project_fyr.analyzer_service`).
 
 You can also use the provided `Makefile`:
 
@@ -46,13 +47,13 @@ docker build -f Dockerfile.analyzer -t project-fyr-analyzer:latest .
 
 docker run --rm --name watcher \
   -e PROJECT_FYR_DATABASE_URL="sqlite:////data/project_fyr.db" \
-  -e PROJECT_FYR_SLACK_BOT_TOKEN="$SLACK_TOKEN" \
   -v $(pwd)/data:/data \
   project-fyr-watcher:latest
 
 docker run --rm --name analyzer \
   -e PROJECT_FYR_DATABASE_URL="sqlite:////data/project_fyr.db" \
   -e PROJECT_FYR_SLACK_BOT_TOKEN="$SLACK_TOKEN" \
+  -e PROJECT_FYR_OPENAI_API_KEY="$OPENAI_API_KEY" \
   project-fyr-analyzer:latest
 ```
 
@@ -79,7 +80,7 @@ Run the watcher service (defaults to SQLite file `project_fyr.db`):
 python -m project_fyr.watcher_service
 ```
 
-Run the analyzer/slack notifier:
+Run the analyzer/agent:
 ```bash
 python -m project_fyr.analyzer_service
 ```
@@ -97,12 +98,9 @@ All services read settings via the `PROJECT_FYR_*` environment variables:
 | `PROJECT_FYR_ROLLOUT_TIMEOUT_SECONDS` | Max rollout age before marking failed | `900` |
 | `PROJECT_FYR_SLACK_BOT_TOKEN` | Bot token for Slack notifications | empty |
 | `PROJECT_FYR_SLACK_DEFAULT_CHANNEL` | Fallback Slack channel | empty |
-| `PROJECT_FYR_OPENAI_API_KEY` | Enables LangChain analyzer | empty (analyzer falls back to heuristic text) |
-| `PROJECT_FYR_LANGCHAIN_MODEL_NAME` | LLM to call through LangChain | `gpt-4o-mini` |
-| `PROJECT_FYR_LOG_TAIL_SECONDS` | Log window for context collection | `300` |
-| `PROJECT_FYR_MAX_LOG_LINES` | Max log lines per rollout | `200` |
-| `PROJECT_FYR_REDUCER_MAX_EVENTS` | Max distinct events kept | `20` |
-| `PROJECT_FYR_REDUCER_MAX_CLUSTERS` | Max log clusters kept | `8` |
+| `PROJECT_FYR_OPENAI_API_KEY` | Required for the Investigator Agent | empty |
+| `PROJECT_FYR_LANGCHAIN_MODEL_NAME` | LLM to use for the agent | `gpt-4o-mini` |
+
 
 When deploying with External Secret Operator, set `secrets.existingSecret` (Helm value) so the watcher pod pulls credentials/keys from that Secret via `envFrom`.
 

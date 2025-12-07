@@ -16,10 +16,7 @@ class Settings(BaseSettings):
     langchain_model_name: str = Field(default="gpt-4o-mini")
     k8s_cluster_name: str = Field(default="ci-cluster")
     rollout_timeout_seconds: int = Field(default=15 * 60)
-    log_tail_seconds: int = Field(default=300)
-    max_log_lines: int = Field(default=200)
-    reducer_max_events: int = Field(default=20)
-    reducer_max_clusters: int = Field(default=8)
+
     slack_mock_log_file: Optional[str] = Field(default=None)
 
     class Config:
