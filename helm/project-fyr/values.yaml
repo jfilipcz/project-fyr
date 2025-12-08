@@ -44,6 +44,27 @@ dashboard:
   tolerations: []
   affinity: {}
 
+metrics:
+  # Prometheus metrics configuration
+  serviceMonitor:
+    # Enable ServiceMonitor for Prometheus Operator
+    enabled: false
+    # Namespace where ServiceMonitor should be created (defaults to release namespace)
+    namespace: ""
+    # Additional labels for ServiceMonitor (useful for Prometheus operator label selectors)
+    additionalLabels: {}
+      # prometheus: kube-prometheus
+    # Scrape interval (default: 30s)
+    interval: 30s
+    # Scrape timeout (default: 10s)
+    scrapeTimeout: 10s
+    # Namespace selector for discovering endpoints
+    namespaceSelector: {}
+    # Relabeling configs to apply to samples before ingestion
+    relabelings: []
+    # MetricRelabelConfigs to apply to samples before ingestion
+    metricRelabelings: []
+
 serviceAccount:
   create: true
   name: ""

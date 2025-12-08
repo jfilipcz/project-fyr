@@ -7,6 +7,7 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
+from prometheus_client import Histogram, Counter
 
 from .models import Analysis
 from .tools import (
@@ -28,6 +29,19 @@ from .tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Prometheus metrics
+AGENT_ITERATIONS = Histogram(
+    'project_fyr_agent_iterations',
+    'Number of LLM iterations per investigation',
+    buckets=[1, 2, 3, 5, 10, 20, 50, 100, 200, 500, 1000]
+)
+
+AGENT_INVESTIGATIONS = Counter(
+    'project_fyr_agent_investigations_total',
+    'Total number of investigations performed',
+    ['status']  # success, error, mock, disabled
+)
 
 AGENT_SYSTEM_PROMPT = """You are an expert Kubernetes SRE. Your task is to diagnose why a deployment is failing.
 You have access to tools to inspect the cluster.
@@ -104,18 +118,19 @@ class InvestigatorAgent:
                 k8s_query_prometheus,
             ]
             
-            # Use the new create_agent API
+            # Use the new create_agent API with recursion limit
             self._agent = create_agent(
                 model=llm,
                 tools=tools,
                 system_prompt=AGENT_SYSTEM_PROMPT,
                 debug=True
-            )
+            ).with_config({"recursion_limit": 1000})
         else:
             self._agent = None
 
     def investigate(self, deployment: str, namespace: str) -> Analysis:
         if self._model_name == "mock":
+            AGENT_INVESTIGATIONS.labels(status='mock').inc()
             return Analysis(
                 summary=f"[MOCK AGENT] Investigated {deployment}",
                 likely_cause="Mock agent active.",
@@ -124,6 +139,7 @@ class InvestigatorAgent:
             )
 
         if not self._enabled or self._agent is None:
+            AGENT_INVESTIGATIONS.labels(status='disabled').inc()
             return Analysis(
                 summary="Agent disabled",
                 likely_cause="Missing API key",
@@ -140,15 +156,21 @@ class InvestigatorAgent:
                 {"messages": [{"role": "user", "content": user_message}]}
             )
             
-            # Extract the final message content
+            # Extract the final message content and count iterations
             messages = result.get("messages", [])
+            
+            # Count iterations: number of AI messages (excluding the initial user message)
+            iteration_count = sum(1 for msg in messages if hasattr(msg, 'type') and msg.type == 'ai')
+            AGENT_ITERATIONS.observe(iteration_count)
+            logger.info(f"Investigation completed in {iteration_count} iterations")
             if messages:
                 # Get the last AI message
                 last_message = messages[-1]
-                output_text = last_message.content if hasattr(last_message, 'content') else str(last_message)
+                output_text = messages[-1].content if hasattr(last_message, 'content') else str(last_message)
             else:
                 output_text = "No response from agent"
             
+            AGENT_INVESTIGATIONS.labels(status='success').inc()
             return Analysis(
                 summary=f"Agent Investigation for {deployment}",
                 likely_cause=output_text,
@@ -158,6 +180,7 @@ class InvestigatorAgent:
             
         except Exception as e:
             logger.error(f"Agent investigation failed: {e}", exc_info=True)
+            AGENT_INVESTIGATIONS.labels(status='error').inc()
             return Analysis(
                 summary=f"Agent failed to investigate {deployment}",
                 likely_cause=f"Internal error: {str(e)}",

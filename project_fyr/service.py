@@ -399,8 +399,20 @@ class AnalyzerService:
             config.load_kube_config()
             logger.info("Analyzer loaded kube config")
 
+        # Start Prometheus metrics server in a background thread
+        self._start_metrics_server()
+
         worker = AnalysisWorker(self._repo, self._config.k8s_cluster_name, self._config)
         worker.loop()
+    
+    def _start_metrics_server(self):
+        """Start Prometheus metrics HTTP server on port 8000."""
+        from prometheus_client import start_http_server
+        try:
+            start_http_server(8000)
+            logger.info("Prometheus metrics server started on port 8000")
+        except Exception as e:
+            logger.warning(f"Failed to start Prometheus metrics server: {e}")
 
 
 def run_watcher():
