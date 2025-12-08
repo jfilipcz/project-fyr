@@ -137,10 +137,12 @@ helm upgrade --install project-fyr ./helm/project-fyr \
 
 Key values:
 - `watcher.*` – replica count, command/args, scheduling hints for the watcher.
+- `analyzer.*` – replica count, command/args, scheduling hints for the analyzer.
 - `config.*` – populates the ConfigMap consumed by the watcher, covering every `PROJECT_FYR_*` setting.
 - `serviceAccount.*` – watcher RBAC identity (set `create=false` + `name` to reuse an existing SA bound to the necessary cluster roles).
 - `rbac.create` – automatically create ClusterRole and ClusterRoleBinding with required permissions (default: `true`).
 - `secrets.existingSecret` – reference to a Secret managed by External Secret Operator (or any other controller) that injects sensitive `PROJECT_FYR_*` values.
+- `metrics.serviceMonitor.*` – enable Prometheus ServiceMonitor for metrics discovery (requires Prometheus Operator).
 
 Mount production secrets via external `Secret` objects and reference them using `envFrom`/`extraEnv` patches if desired—the chart keeps ConfigMap values simple for local testing. Namespace annotations control Slack routing/metadata instead of a dedicated GitLab service.
 
@@ -169,6 +171,65 @@ helm upgrade --install project-fyr ./helm/project-fyr -f dev-values.yaml
 ```
 
 The dependency is disabled by default; in production you should continue pointing `PROJECT_FYR_DATABASE_URL` at your managed database and rely on `secrets.existingSecret` (ESO) to mount credentials.
+
+## Prometheus Metrics
+
+The analyzer service exposes Prometheus metrics on port 8000 at `/metrics`:
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `project_fyr_agent_iterations` | Histogram | Number of LLM iterations per investigation (buckets: 1-1000) |
+| `project_fyr_agent_investigations_total` | Counter | Total investigations by status (success, error, mock, disabled) |
+
+### ServiceMonitor (Prometheus Operator)
+
+If you're using Prometheus Operator, enable the ServiceMonitor in your Helm values:
+
+```yaml
+metrics:
+  serviceMonitor:
+    enabled: true
+    # Add labels that match your Prometheus operator's serviceMonitorSelector
+    additionalLabels:
+      prometheus: kube-prometheus
+    interval: 30s
+    scrapeTimeout: 10s
+```
+
+The ServiceMonitor will automatically configure Prometheus to scrape the analyzer metrics endpoint.
+
+### Manual Prometheus Configuration
+
+If not using Prometheus Operator, add this to your Prometheus scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: 'project-fyr-analyzer'
+    static_configs:
+      - targets: ['project-fyr-analyzer-metrics:8000']
+```
+
+### Using the Metrics
+
+These metrics help you:
+- Monitor investigation costs (iterations ≈ API calls)
+- Track investigation success rate
+- Set up alerts for investigation failures
+- Understand typical investigation complexity
+
+Example PromQL queries:
+
+```promql
+# Average iterations per investigation
+rate(project_fyr_agent_iterations_sum[5m]) / rate(project_fyr_agent_iterations_count[5m])
+
+# Investigation success rate
+rate(project_fyr_agent_investigations_total{status="success"}[5m]) / 
+rate(project_fyr_agent_investigations_total[5m]) * 100
+
+# 95th percentile iteration count
+histogram_quantile(0.95, rate(project_fyr_agent_iterations_bucket[5m]))
+```
 
 ## Triage heuristics
 

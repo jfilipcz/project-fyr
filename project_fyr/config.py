@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     slack_default_channel: Optional[str] = Field(default=None)
     openai_api_key: Optional[str] = Field(default=None)
     openai_api_base: Optional[str] = Field(default=None)
-    openai_api_version: str = Field(default=None)
+    openai_api_version: Optional[str] = Field(default=None)
     azure_deployment: Optional[str] = Field(default=None)
     langchain_model_name: str = Field(default="gpt-4o-mini")
     k8s_cluster_name: str = Field(default="ci-cluster")
