@@ -234,6 +234,9 @@ class AnalysisWorker:
         self._agent = InvestigatorAgent(
             model_name=config.langchain_model_name,
             api_key=config.openai_api_key,
+            api_base=config.openai_api_base,
+            api_version=config.openai_api_version,
+            azure_deployment=config.azure_deployment,
         )
         self._slack = SlackNotifier(
             token=config.slack_bot_token,

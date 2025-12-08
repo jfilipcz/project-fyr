@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-failing-app
+  namespace: fyr-test
+  labels:
+    project-fyr/enabled: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-failing-app
+  template:
+    metadata:
+      labels:
+        app: test-failing-app
+    spec:
+      containers:
+      - name: busybox
+        image: busybox:nonexistent-tag-to-force-failure
+        command: ["sh", "-c", "echo 'Starting' && sleep 3600"]

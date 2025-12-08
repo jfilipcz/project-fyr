@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Optional
+from datetime import datetime, timedelta
 
 import yaml
+import requests
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from langchain_core.tools import tool
+
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -610,3 +614,110 @@ def k8s_get_endpoints(service_name: str, namespace: str) -> str:
         return f"Error getting endpoints: {e.reason}"
     except Exception as e:
         return f"Unexpected error: {str(e)}"
+
+
+@tool
+def k8s_query_prometheus(
+    query: str,
+    namespace: str,
+    pod_pattern: Optional[str] = None,
+    lookback_minutes: int = 60
+) -> str:
+    """Query Prometheus metrics for debugging Kubernetes deployments.
+    
+    Useful for identifying:
+    - Pod restart patterns and frequency
+    - OOMKills and memory pressure
+    - CPU throttling indicating resource constraints
+    - Network errors or connectivity issues
+    
+    Common query patterns:
+    - "restarts" - Shows container restart count over time
+    - "oom" - Shows OOMKilled containers
+    - "cpu_throttled" - Shows CPU throttling percentage
+    - "memory_usage" - Shows memory usage vs limits
+    - "network_errors" - Shows network receive/transmit errors
+    
+    Args:
+        query: Query type - one of: restarts, oom, cpu_throttled, memory_usage, network_errors, custom
+        namespace: Kubernetes namespace to query
+        pod_pattern: Optional pod name pattern (regex) to filter by
+        lookback_minutes: How many minutes to look back (default 60)
+    """
+    if not settings.prometheus_url:
+        return "Prometheus is not configured. Set PROJECT_FYR_PROMETHEUS_URL environment variable."
+    
+    try:
+        # Build PromQL query based on the requested metric
+        pod_filter = f', pod=~"{pod_pattern}.*"' if pod_pattern else ''
+        
+        promql_queries = {
+            "restarts": f'increase(kube_pod_container_status_restarts_total{{namespace="{namespace}"{pod_filter}}}[{lookback_minutes}m])',
+            "oom": f'kube_pod_container_status_terminated_reason{{reason="OOMKilled", namespace="{namespace}"{pod_filter}}}',
+            "cpu_throttled": f'rate(container_cpu_cfs_throttled_seconds_total{{namespace="{namespace}"{pod_filter}}}[5m]) * 100',
+            "memory_usage": f'(container_memory_working_set_bytes{{namespace="{namespace}"{pod_filter}}} / container_spec_memory_limit_bytes{{namespace="{namespace}"{pod_filter}}}) * 100',
+            "network_errors": f'rate(container_network_receive_errors_total{{namespace="{namespace}"{pod_filter}}}[5m]) + rate(container_network_transmit_errors_total{{namespace="{namespace}"{pod_filter}}}[5m])',
+        }
+        
+        promql = promql_queries.get(query, query)
+        
+        # Query Prometheus
+        url = f"{settings.prometheus_url.rstrip('/')}/api/v1/query"
+        response = requests.get(
+            url,
+            params={"query": promql},
+            timeout=10
+        )
+        response.raise_for_status()
+        
+        data = response.json()
+        if data["status"] != "success":
+            return f"Prometheus query failed: {data.get('error', 'unknown error')}"
+        
+        results = data["data"]["result"]
+        if not results:
+            return f"No metrics found for query '{query}' in namespace '{namespace}'"
+        
+        # Format results
+        output = [f"Prometheus Metrics ({query}, last {lookback_minutes}m):"]
+        
+        for result in results:
+            metric = result["metric"]
+            value = result["value"][1]  # [timestamp, value]
+            
+            # Extract relevant labels
+            pod = metric.get("pod", "")
+            container = metric.get("container", "")
+            
+            # Format based on query type
+            if query == "restarts":
+                if float(value) > 0:
+                    output.append(f"  • Pod {pod}: {float(value):.0f} restarts")
+            elif query == "oom":
+                output.append(f"  • Pod {pod}, Container {container}: OOMKilled")
+            elif query == "cpu_throttled":
+                throttle_pct = float(value)
+                if throttle_pct > 1:  # Only show significant throttling
+                    output.append(f"  • Pod {pod}, Container {container}: {throttle_pct:.1f}% CPU throttled")
+            elif query == "memory_usage":
+                mem_pct = float(value)
+                output.append(f"  • Pod {pod}, Container {container}: {mem_pct:.1f}% memory usage")
+            elif query == "network_errors":
+                error_rate = float(value)
+                if error_rate > 0:
+                    output.append(f"  • Pod {pod}: {error_rate:.2f} network errors/sec")
+            else:
+                # Custom query - just show the metric
+                output.append(f"  • {metric}: {value}")
+        
+        if len(output) == 1:  # Only header, no results
+            output.append("  No significant issues detected")
+        
+        return "\n".join(output)
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Prometheus query failed: {e}")
+        return f"Failed to query Prometheus: {str(e)}"
+    except Exception as e:
+        logger.error(f"Unexpected error querying Prometheus: {e}", exc_info=True)
+        return f"Error querying Prometheus: {str(e)}"

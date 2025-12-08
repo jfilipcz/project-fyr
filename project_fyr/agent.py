@@ -5,8 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from langchain.agents import AgentExecutor, create_openai_tools_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 
 from .models import Analysis
@@ -25,6 +24,7 @@ from .tools import (
     k8s_get_storage,
     k8s_list_helm_releases,
     k8s_logs,
+    k8s_query_prometheus,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,12 @@ Follow this investigation process:
 6. If connectivity is an issue, use `k8s_get_network_policies` to check for traffic blocking.
 7. If permission errors are found, use `k8s_check_rbac` to verify ServiceAccount permissions.
 8. If the deployment is managed by ArgoCD or Helm, check the application status or release status for sync errors or failed hooks.
+9. Use Prometheus metrics (if available) to check for:
+   - Frequent pod restarts that might indicate instability
+   - OOMKills suggesting memory limits are too low
+   - CPU throttling indicating resource constraints
+   - High memory usage approaching limits
+   - Network errors that might cause connectivity issues
 
 Your final answer must be a structured analysis containing:
 - A summary of the issue.
@@ -58,12 +64,28 @@ Do not give up easily. Dig deep into logs and events.
 """
 
 class InvestigatorAgent:
-    def __init__(self, model_name: str = "gpt-4-turbo-preview", api_key: str | None = None):
+    def __init__(self, model_name: str = "gpt-4-turbo-preview", api_key: str | None = None, 
+                 api_base: str | None = None, api_version: str | None = None,
+                 azure_deployment: str | None = None):
         self._model_name = model_name
         self._enabled = api_key is not None or model_name == "mock"
         
         if self._enabled and model_name != "mock":
-            llm = ChatOpenAI(model=model_name, temperature=0, api_key=api_key)
+            # Configure for Azure OpenAI if api_base is provided
+            if api_base:
+                # For Azure OpenAI, use AzureChatOpenAI instead
+                from langchain_openai import AzureChatOpenAI
+                llm = AzureChatOpenAI(
+                    model=azure_deployment or model_name,
+                    azure_deployment=azure_deployment or model_name,
+                    temperature=1,
+                    api_key=api_key,
+                    azure_endpoint=api_base,
+                    api_version=api_version,
+                )
+            else:
+                llm = ChatOpenAI(model=model_name, temperature=0, api_key=api_key)
+            
             tools = [
                 k8s_get_resources,
                 k8s_describe,
@@ -79,26 +101,18 @@ class InvestigatorAgent:
                 k8s_check_rbac,
                 k8s_get_network_policies,
                 k8s_get_endpoints,
+                k8s_query_prometheus,
             ]
             
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    ("system", AGENT_SYSTEM_PROMPT),
-                    ("human", "Investigate the deployment '{deployment}' in namespace '{namespace}'."),
-                    MessagesPlaceholder(variable_name="agent_scratchpad"),
-                ]
-            )
-            
-            agent = create_openai_tools_agent(llm, tools, prompt)
-            self._agent_executor = AgentExecutor(
-                agent=agent, 
-                tools=tools, 
-                verbose=True,
-                handle_parsing_errors=True,
-                max_iterations=15
+            # Use the new create_agent API
+            self._agent = create_agent(
+                model=llm,
+                tools=tools,
+                system_prompt=AGENT_SYSTEM_PROMPT,
+                debug=True
             )
         else:
-            self._agent_executor = None
+            self._agent = None
 
     def investigate(self, deployment: str, namespace: str) -> Analysis:
         if self._model_name == "mock":
@@ -109,7 +123,7 @@ class InvestigatorAgent:
                 severity="low",
             )
 
-        if not self._enabled or self._agent_executor is None:
+        if not self._enabled or self._agent is None:
             return Analysis(
                 summary="Agent disabled",
                 likely_cause="Missing API key",
@@ -118,39 +132,32 @@ class InvestigatorAgent:
             )
 
         try:
-            # We need the agent to return a structured output. 
-            # Since the agent returns a string "output", we might need to parse it or force the agent to use a final tool.
-            # For simplicity in this iteration, we will ask the agent to output the final answer in a specific format 
-            # and then parse it, or we can use a structured output parser on the final result.
-            # However, `Analysis` is a Pydantic model. 
-            # Let's try to wrap the invocation and parse the text, or better, use a structured output chain *after* the agent.
-            # OR, we can instruct the agent to return JSON.
+            # Use the new agent API - it expects messages format
+            user_message = f"Investigate the deployment '{deployment}' in namespace '{namespace}'."
             
-            # Let's refine the prompt to ask for JSON or use a Pydantic parser on the result.
-            # For now, let's rely on the agent's text output and wrap it in Analysis, 
-            # or we can try to parse it if it follows a format.
-            
-            # Actually, let's just take the text output and put it in 'summary' and 'likely_cause' for now,
-            # as fully structured parsing from a free-form agent is tricky without a specific "FinalAnswer" tool.
-            
-            result = self._agent_executor.invoke(
-                {"deployment": deployment, "namespace": namespace}
+            # Invoke the agent with the new format
+            result = self._agent.invoke(
+                {"messages": [{"role": "user", "content": user_message}]}
             )
-            output_text = result["output"]
             
-            # Heuristic parsing or just dumping the text.
-            # Ideally we would use a structured output parser.
-            # Let's assume the agent follows instructions well enough to provide a clear text we can put in summary.
+            # Extract the final message content
+            messages = result.get("messages", [])
+            if messages:
+                # Get the last AI message
+                last_message = messages[-1]
+                output_text = last_message.content if hasattr(last_message, 'content') else str(last_message)
+            else:
+                output_text = "No response from agent"
             
             return Analysis(
                 summary=f"Agent Investigation for {deployment}",
-                likely_cause=output_text, # The agent's full explanation usually contains the cause
+                likely_cause=output_text,
                 recommended_steps=["See detailed analysis above."],
-                severity="medium" # Default
+                severity="medium"
             )
             
         except Exception as e:
-            logger.error(f"Agent investigation failed: {e}")
+            logger.error(f"Agent investigation failed: {e}", exc_info=True)
             return Analysis(
                 summary=f"Agent failed to investigate {deployment}",
                 likely_cause=f"Internal error: {str(e)}",
