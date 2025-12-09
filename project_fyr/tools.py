@@ -312,3 +312,301 @@ def k8s_list_helm_releases(namespace: str) -> str:
         return f"Error listing Helm releases: {e.reason}"
     except Exception as e:
         return f"Unexpected error: {str(e)}"
+
+
+@tool
+def k8s_get_configmap(name: str, namespace: str) -> str:
+    """
+    Get the content of a ConfigMap.
+    
+    Args:
+        name: The name of the ConfigMap.
+        namespace: The namespace of the ConfigMap.
+    """
+    core_v1 = _get_core_v1()
+    try:
+        cm = core_v1.read_namespaced_config_map(name, namespace)
+        data = cm.data or {}
+        return yaml.dump(data) if data else "Empty ConfigMap"
+    except ApiException as e:
+        if e.status == 404:
+            return f"ConfigMap '{name}' not found in namespace '{namespace}'."
+        return f"Error getting ConfigMap: {e.reason}"
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
+
+
+@tool
+def k8s_get_secret_structure(name: str, namespace: str) -> str:
+    """
+    Get the structure (keys only) of a Secret. Values are REDACTED.
+    
+    Args:
+        name: The name of the Secret.
+        namespace: The namespace of the Secret.
+    """
+    core_v1 = _get_core_v1()
+    try:
+        secret = core_v1.read_namespaced_secret(name, namespace)
+        keys = list(secret.data.keys()) if secret.data else []
+        return f"Secret '{name}' contains keys: {', '.join(keys)}"
+    except ApiException as e:
+        if e.status == 404:
+            return f"Secret '{name}' not found in namespace '{namespace}'."
+        return f"Error getting Secret: {e.reason}"
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
+
+
+@tool
+def k8s_get_storage(namespace: str) -> str:
+    """
+    List PersistentVolumeClaims (PVCs) in a namespace and their status.
+    
+    Args:
+        namespace: The namespace to list PVCs in.
+    """
+    core_v1 = _get_core_v1()
+    try:
+        pvcs = core_v1.list_namespaced_persistent_volume_claim(namespace).items
+        if not pvcs:
+            return "No PVCs found."
+        
+        output = ["PersistentVolumeClaims:"]
+        for pvc in pvcs:
+            name = pvc.metadata.name
+            phase = pvc.status.phase
+            capacity = pvc.status.capacity.get("storage", "Unknown") if pvc.status.capacity else "Unknown"
+            volume = pvc.spec.volume_name or "Pending"
+            output.append(f"- {name}: {phase} (Capacity: {capacity}, Volume: {volume})")
+            
+        return "\n".join(output)
+    except ApiException as e:
+        return f"Error listing PVCs: {e.reason}"
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
+
+
+def _get_networking_v1() -> client.NetworkingV1Api:
+    try:
+        return client.NetworkingV1Api()
+    except Exception:
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            config.load_kube_config()
+        return client.NetworkingV1Api()
+
+
+@tool
+def k8s_get_network(namespace: str) -> str:
+    """
+    List Services and Ingresses in a namespace.
+    
+    Args:
+        namespace: The namespace to list network resources in.
+    """
+    core_v1 = _get_core_v1()
+    net_v1 = _get_networking_v1()
+    
+    output = []
+    
+    try:
+        # Services
+        services = core_v1.list_namespaced_service(namespace).items
+        if services:
+            output.append("Services:")
+            for svc in services:
+                name = svc.metadata.name
+                type_ = svc.spec.type
+                ports = ", ".join([f"{p.port}/{p.protocol}" for p in svc.spec.ports]) if svc.spec.ports else "No ports"
+                cluster_ip = svc.spec.cluster_ip
+                output.append(f"- {name} ({type_}): {cluster_ip} [{ports}]")
+        else:
+            output.append("No Services found.")
+            
+        output.append("")
+        
+        # Ingresses
+        ingresses = net_v1.list_namespaced_ingress(namespace).items
+        if ingresses:
+            output.append("Ingresses:")
+            for ing in ingresses:
+                name = ing.metadata.name
+                rules = []
+                for rule in (ing.spec.rules or []):
+                    host = rule.host or "*"
+                    paths = [p.path for p in (rule.http.paths or [])]
+                    rules.append(f"{host}{paths}")
+                output.append(f"- {name}: {', '.join(rules)}")
+        else:
+            output.append("No Ingresses found.")
+            
+        return "\n".join(output)
+        
+    except ApiException as e:
+        return f"Error listing network resources: {e.reason}"
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
+
+
+@tool
+def k8s_get_nodes() -> str:
+    """
+    List nodes with their status, roles, and taints.
+    Useful for diagnosing scheduling issues (Pending pods).
+    """
+    core_v1 = _get_core_v1()
+    try:
+        nodes = core_v1.list_node().items
+        output = ["Nodes:"]
+        for node in nodes:
+            name = node.metadata.name
+            
+            # Status
+            conditions = node.status.conditions or []
+            ready_cond = next((c for c in conditions if c.type == "Ready"), None)
+            status = "Ready" if ready_cond and ready_cond.status == "True" else "NotReady"
+            
+            # Roles
+            labels = node.metadata.labels or {}
+            roles = [k.split("/")[-1] for k in labels.keys() if "node-role.kubernetes.io" in k]
+            roles_str = ", ".join(roles) if roles else "worker"
+            
+            # Taints
+            taints = node.spec.taints or []
+            taints_str = ", ".join([f"{t.key}={t.value}:{t.effect}" for t in taints]) if taints else "None"
+            
+            # Capacity (simplified)
+            cpu = node.status.allocatable.get("cpu", "?")
+            mem = node.status.allocatable.get("memory", "?")
+            
+            output.append(f"- {name} ({roles_str}): {status} [CPU: {cpu}, Mem: {mem}] Taints: {taints_str}")
+            
+        return "\n".join(output)
+    except ApiException as e:
+        return f"Error listing nodes: {e.reason}"
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
+
+
+def _get_auth_v1() -> client.AuthorizationV1Api:
+    try:
+        return client.AuthorizationV1Api()
+    except Exception:
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            config.load_kube_config()
+        return client.AuthorizationV1Api()
+
+
+@tool
+def k8s_check_rbac(service_account: str, namespace: str, verb: str, resource: str, resource_name: Optional[str] = None) -> str:
+    """
+    Check if a ServiceAccount has permission to perform an action.
+    
+    Args:
+        service_account: Name of the ServiceAccount.
+        namespace: Namespace of the ServiceAccount.
+        verb: The action (get, list, watch, create, update, patch, delete).
+        resource: The resource type (pods, secrets, configmaps, etc.).
+        resource_name: Optional name of the specific resource.
+    """
+    auth_v1 = _get_auth_v1()
+    try:
+        # Construct the SubjectAccessReview
+        sar = client.V1SubjectAccessReview(
+            spec=client.V1SubjectAccessReviewSpec(
+                resource_attributes=client.V1ResourceAttributes(
+                    namespace=namespace,
+                    verb=verb,
+                    resource=resource,
+                    name=resource_name,
+                ),
+                user=f"system:serviceaccount:{namespace}:{service_account}",
+            )
+        )
+        
+        response = auth_v1.create_subject_access_review(sar)
+        allowed = response.status.allowed
+        reason = response.status.reason or "No reason provided"
+        
+        result = "ALLOWED" if allowed else "DENIED"
+        return f"Permission check for {service_account} to {verb} {resource}/{resource_name or '*'}: {result} ({reason})"
+        
+    except ApiException as e:
+        return f"Error checking RBAC: {e.reason}"
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
+
+
+@tool
+def k8s_get_network_policies(namespace: str) -> str:
+    """
+    List NetworkPolicies in a namespace.
+    """
+    net_v1 = _get_networking_v1()
+    try:
+        policies = net_v1.list_namespaced_network_policy(namespace).items
+        if not policies:
+            return "No NetworkPolicies found (all traffic allowed unless denied by other means)."
+            
+        output = ["NetworkPolicies:"]
+        for np in policies:
+            name = np.metadata.name
+            pod_selector = np.spec.pod_selector.match_labels or {}
+            policy_types = np.spec.policy_types or []
+            output.append(f"- {name}: Selects {pod_selector}, Types: {policy_types}")
+            
+        return "\n".join(output)
+    except ApiException as e:
+        return f"Error listing NetworkPolicies: {e.reason}"
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
+
+
+@tool
+def k8s_get_endpoints(service_name: str, namespace: str) -> str:
+    """
+    List Endpoints for a Service to check if it targets any pods.
+    """
+    core_v1 = _get_core_v1()
+    try:
+        eps = core_v1.read_namespaced_endpoints(service_name, namespace)
+        subsets = eps.subsets or []
+        
+        output = [f"Endpoints for {service_name}:"]
+        
+        total_addresses = 0
+        total_not_ready = 0
+        
+        for subset in subsets:
+            addresses = subset.addresses or []
+            not_ready = subset.not_ready_addresses or []
+            ports = subset.ports or []
+            
+            total_addresses += len(addresses)
+            total_not_ready += len(not_ready)
+            
+            ports_str = ", ".join([f"{p.port}/{p.protocol}" for p in ports])
+            
+            if addresses:
+                ips = ", ".join([a.ip for a in addresses])
+                output.append(f"  Ready IPs ({ports_str}): {ips}")
+            
+            if not_ready:
+                ips = ", ".join([a.ip for a in not_ready])
+                output.append(f"  NotReady IPs ({ports_str}): {ips}")
+                
+        if total_addresses == 0 and total_not_ready == 0:
+            return f"Service {service_name} has NO endpoints. Check selector labels."
+            
+        return "\n".join(output)
+        
+    except ApiException as e:
+        if e.status == 404:
+            return f"Endpoints for service '{service_name}' not found."
+        return f"Error getting endpoints: {e.reason}"
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
