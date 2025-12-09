@@ -11,10 +11,18 @@ from langchain_openai import ChatOpenAI
 
 from .models import Analysis
 from .tools import (
+    k8s_check_rbac,
     k8s_describe,
     k8s_events,
     k8s_get_argocd_application,
+    k8s_get_configmap,
+    k8s_get_endpoints,
+    k8s_get_network,
+    k8s_get_network_policies,
+    k8s_get_nodes,
     k8s_get_resources,
+    k8s_get_secret_structure,
+    k8s_get_storage,
     k8s_list_helm_releases,
     k8s_logs,
 )
@@ -28,9 +36,17 @@ Follow this investigation process:
 1. Start by listing the pods for the deployment to see their status.
 2. Check events in the namespace for any errors related to the deployment or pods.
 3. If pods are crashing (CrashLoopBackOff), inspect their logs. Use `previous=True` if they have restarted recently.
-4. If pods are pending, describe them to check for scheduling issues (resources, affinity, etc.).
-5. Check for missing dependencies like Services or ConfigMaps if logs indicate connection or configuration errors.
-6. If the deployment is managed by ArgoCD or Helm, check the application status or release status for sync errors or failed hooks.
+4. If pods are pending:
+   - Describe them to check for scheduling issues (resources, affinity, taints).
+   - Use `k8s_get_nodes` to check node status and capacity.
+   - Use `k8s_get_storage` if there are PVC/Volume mounting issues.
+5. Check for missing dependencies or configuration:
+   - Use `k8s_get_network` to verify Services and Ingresses.
+   - Use `k8s_get_endpoints` to verify Service targeting.
+   - Use `k8s_get_configmap` or `k8s_get_secret_structure` if logs indicate configuration or credential errors.
+6. If connectivity is an issue, use `k8s_get_network_policies` to check for traffic blocking.
+7. If permission errors are found, use `k8s_check_rbac` to verify ServiceAccount permissions.
+8. If the deployment is managed by ArgoCD or Helm, check the application status or release status for sync errors or failed hooks.
 
 Your final answer must be a structured analysis containing:
 - A summary of the issue.
@@ -55,6 +71,14 @@ class InvestigatorAgent:
                 k8s_events,
                 k8s_get_argocd_application,
                 k8s_list_helm_releases,
+                k8s_get_configmap,
+                k8s_get_secret_structure,
+                k8s_get_storage,
+                k8s_get_network,
+                k8s_get_nodes,
+                k8s_check_rbac,
+                k8s_get_network_policies,
+                k8s_get_endpoints,
             ]
             
             prompt = ChatPromptTemplate.from_messages(

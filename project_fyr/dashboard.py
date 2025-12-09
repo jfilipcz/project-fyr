@@ -43,3 +43,50 @@ async def detail(request: Request, rollout_id: int, repo: RolloutRepo = Depends(
             analysis_data = record.analysis
 
     return templates.TemplateResponse("detail.html", {"request": request, "rollout": rollout, "analysis": analysis_data})
+
+@app.post("/api/investigate")
+async def investigate(request: Request):
+    data = await request.json()
+    deployment = data.get("deployment")
+    namespace = data.get("namespace")
+    
+    if not deployment or not namespace:
+        raise HTTPException(status_code=400, detail="Missing deployment or namespace")
+        
+    from .agent import InvestigatorAgent
+    
+    agent = InvestigatorAgent(
+        model_name=settings.langchain_model_name,
+        api_key=settings.openai_api_key
+    )
+    
+    try:
+        analysis = agent.investigate(deployment, namespace)
+        return analysis.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/investigate", response_class=HTMLResponse)
+async def investigate_page(request: Request):
+    from kubernetes import client, config
+    try:
+        config.load_incluster_config()
+    except:
+        config.load_kube_config()
+        
+    v1 = client.AppsV1Api()
+    core = client.CoreV1Api()
+    
+    namespaces = [ns.metadata.name for ns in core.list_namespace().items]
+    deployments = {}
+    
+    for ns in namespaces:
+        deps = v1.list_namespaced_deployment(ns).items
+        if deps:
+            deployments[ns] = [d.metadata.name for d in deps]
+            
+    return templates.TemplateResponse("investigate.html", {
+        "request": request, 
+        "namespaces": namespaces, 
+        "deployments": deployments
+    })

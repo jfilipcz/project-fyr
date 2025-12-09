@@ -10,6 +10,10 @@
 {{- printf "%s-analyzer" (include "project-fyr.fullname" .) -}}
 {{- end -}}
 
+{{- define "project-fyr.dashboardName" -}}
+{{- printf "%s-dashboard" (include "project-fyr.fullname" .) -}}
+{{- end -}}
+
 {{- define "project-fyr.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Investigate - Project Fyr</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f4f4f9;
+            color: #333;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+        }
+
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        select,
+        button {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #f8f9fa;
+            display: none;
+            white-space: pre-wrap;
+        }
+
+        .loading {
+            text-align: center;
+            display: none;
+            margin-top: 20px;
+        }
+
+        .nav {
+            margin-bottom: 20px;
+        }
+
+        .nav a {
+            margin-right: 15px;
+            text-decoration: none;
+            color: #007bff;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="nav">
+        <a href="/">← Back to Dashboard</a>
+    </div>
+    <div class="container">
+        <h1>On-Demand Investigation</h1>
+        <div class="form-group">
+            <label for="namespace">Namespace</label>
+            <select id="namespace" onchange="updateDeployments()">
+                <option value="">Select Namespace</option>
+                {% for ns in namespaces %}
+                <option value="{{ ns }}">{{ ns }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="deployment">Deployment</label>
+            <select id="deployment" disabled>
+                <option value="">Select Namespace First</option>
+            </select>
+        </div>
+        <button id="investigateBtn" onclick="runInvestigation()" disabled>Start Investigation</button>
+
+        <div id="loading" class="loading">
+            Investigating... This may take a minute.
+        </div>
+
+        <div id="result"></div>
+    </div>
+
+    <script>
+        const deployments = {{ deployments | tojson }};
+
+        function updateDeployments() {
+            const nsSelect = document.getElementById('namespace');
+            const depSelect = document.getElementById('deployment');
+            const btn = document.getElementById('investigateBtn');
+            const ns = nsSelect.value;
+
+            depSelect.innerHTML = '<option value="">Select Deployment</option>';
+            depSelect.disabled = !ns;
+            btn.disabled = true;
+
+            if (ns && deployments[ns]) {
+                deployments[ns].forEach(dep => {
+                    const option = document.createElement('option');
+                    option.value = dep;
+                    option.textContent = dep;
+                    depSelect.appendChild(option);
+                });
+            }
+        }
+
+        document.getElementById('deployment').addEventListener('change', function () {
+            document.getElementById('investigateBtn').disabled = !this.value;
+        });
+
+        async function runInvestigation() {
+            const ns = document.getElementById('namespace').value;
+            const dep = document.getElementById('deployment').value;
+            const btn = document.getElementById('investigateBtn');
+            const loading = document.getElementById('loading');
+            const resultDiv = document.getElementById('result');
+
+            if (!ns || !dep) return;
+
+            btn.disabled = true;
+            loading.style.display = 'block';
+            resultDiv.style.display = 'none';
+            resultDiv.textContent = '';
+
+            try {
+                const response = await fetch('/api/investigate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ namespace: ns, deployment: dep })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+
+                let output = `Summary: ${data.summary}\n\n`;
+                output += `Likely Cause: ${data.likely_cause}\n\n`;
+                output += `Severity: ${data.severity}\n\n`;
+                output += `Recommended Steps:\n${data.recommended_steps.map(s => '- ' + s).join('\n')}`;
+
+                resultDiv.textContent = output;
+                resultDiv.style.display = 'block';
+
+            } catch (e) {
+                resultDiv.textContent = `Investigation failed: ${e.message}`;
+                resultDiv.style.display = 'block';
+                resultDiv.style.color = 'red';
+            } finally {
+                btn.disabled = false;
+                loading.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+
+</html>
