@@ -49,6 +49,9 @@ def test_investigate_page(mock_core, mock_apps, mock_config):
     
     mock_dep = MagicMock()
     mock_dep.metadata.name = "nginx"
+    # Fix: Set numeric values for replicas to avoid MagicMock comparison
+    mock_dep.status.ready_replicas = 3
+    mock_dep.spec.replicas = 3
     mock_apps_instance.list_namespaced_deployment.return_value.items = [mock_dep]
     
     response = client.get("/investigate")
