@@ -46,7 +46,7 @@ def _clean_metadata(obj: dict) -> dict:
         meta = obj["metadata"]
         for key in ["managedFields", "uid", "resourceVersion", "generation", "creationTimestamp"]:
             meta.pop(key, None)
-        if "annotations" in meta:
+        if "annotations" in meta and meta["annotations"]:
             # Remove kubectl-last-applied-configuration as it's huge
             meta["annotations"].pop("kubectl.kubernetes.io/last-applied-configuration", None)
     return obj

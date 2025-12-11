@@ -31,5 +31,5 @@ rules:
   # Read namespace metadata (for annotations)
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get"]
+    verbs: ["get", "list"]
 {{- end }}

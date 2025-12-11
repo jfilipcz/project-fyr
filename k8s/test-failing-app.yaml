@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-failing-app
-  namespace: fyr-test
+  namespace: fyr-testing
   labels:
     project-fyr/enabled: "true"
 spec:

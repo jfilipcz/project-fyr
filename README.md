@@ -3,11 +3,12 @@
 Project Fyr is an agentic AI assistant that watches Kubernetes deployments, inspects failures, enriches them using namespace annotations, and posts concise guidance to Slack. It contains:
 
 - **Watcher** – streams deployment events and tracks rollout status.
-- **Investigator Agent** – an autonomous LangChain agent that investigates failures by actively querying the cluster (Pods, Events, Logs, ArgoCD, Helm).
+- **Analyzer** – an autonomous LangChain agent that investigates failures by actively querying the cluster (Pods, Events, Logs, ArgoCD, Helm, Prometheus).
+- **Dashboard** – a FastAPI web UI for browsing rollouts, viewing analyses, and triggering on-demand investigations.
 - **Slack Notifier** – posts the agent's analysis (summary, root cause, remediation) to Slack.
 - **Namespace annotations** – opt-in metadata (Slack channel, owning team, etc.) stored on the Kubernetes namespace.
 - **Triage helper** – heuristics to suggest the responsible team (infra, security, application).
-- **Helm chart** – deploys the watcher/analyzer with configurable settings.
+- **Helm chart** – deploys all three services (watcher, analyzer, dashboard) with configurable settings.
 
 ## Local Development
 
@@ -25,36 +26,47 @@ pip install -e '.[dev]'
 
 ### Container images
 
-Two Dockerfiles are available:
+A single `Dockerfile` builds all three services:
 
-- `Dockerfile` – watcher/reconciler service (`python -m project_fyr.watcher_service`).
-- `Dockerfile.analyzer` – analyzer/agent service (`python -m project_fyr.analyzer_service`).
+- **Watcher**: `python -m project_fyr.watcher_service`
+- **Analyzer**: `python -m project_fyr.analyzer_service`
+- **Dashboard**: `python -m project_fyr.dashboard`
 
-You can also use the provided `Makefile`:
+You can use the provided `Makefile`:
 
 ```bash
-make build-watcher TAG=dev
-make build-analyzer TAG=dev
-# cross-compile + push to registry
-make push-watcher TAG=1.0.0 REGISTRY=ghcr.io/my-org PLATFORM=linux/amd64
+make build TAG=dev
+make push TAG=1.0.0 REGISTRY=ghcr.io/my-org
+# cross-compile for specific platform
+make build TAG=dev PLATFORM=linux/amd64
 ```
 
 Example build/run:
 
 ```bash
-docker build -f Dockerfile -t project-fyr-watcher:latest .
-docker build -f Dockerfile.analyzer -t project-fyr-analyzer:latest .
+docker build -t project-fyr:latest .
 
+# Run watcher
 docker run --rm --name watcher \
   -e PROJECT_FYR_DATABASE_URL="sqlite:////data/project_fyr.db" \
   -v $(pwd)/data:/data \
-  project-fyr-watcher:latest
+  project-fyr:latest \
+  python -m project_fyr.watcher_service
 
+# Run analyzer
 docker run --rm --name analyzer \
   -e PROJECT_FYR_DATABASE_URL="sqlite:////data/project_fyr.db" \
   -e PROJECT_FYR_SLACK_BOT_TOKEN="$SLACK_TOKEN" \
   -e PROJECT_FYR_OPENAI_API_KEY="$OPENAI_API_KEY" \
-  project-fyr-analyzer:latest
+  project-fyr:latest \
+  python -m project_fyr.analyzer_service
+
+# Run dashboard
+docker run --rm --name dashboard \
+  -e PROJECT_FYR_DATABASE_URL="sqlite:////data/project_fyr.db" \
+  -p 8000:8000 \
+  project-fyr:latest \
+  python -m project_fyr.dashboard
 ```
 
 Override environment variables (or inject secrets) to point at your production database and tokens.
@@ -65,24 +77,22 @@ Use `docker buildx` (or an equivalent builder) to force `linux/amd64` output eve
 
 ```bash
 docker buildx build --platform linux/amd64 \
-  -f Dockerfile \
-  -t ghcr.io/example/project-fyr-watcher:amd64 .
-
-docker buildx build --platform linux/amd64 \
-  -f Dockerfile.analyzer \
-  -t ghcr.io/example/project-fyr-analyzer:amd64 .
+  -t ghcr.io/example/project-fyr:amd64 . --push
 ```
 
-Add `--push` to publish to your registry once the builds succeed.
+#### Local development
 
-Run the watcher service (defaults to SQLite file `project_fyr.db`):
+Run services locally (defaults to SQLite file `project_fyr.db`):
+
 ```bash
+# Watcher
 python -m project_fyr.watcher_service
-```
 
-Run the analyzer/agent:
-```bash
+# Analyzer
 python -m project_fyr.analyzer_service
+
+# Dashboard (http://localhost:8000)
+python -m project_fyr.dashboard
 ```
 
 Use `pytest`/`ruff` from the optional `dev` extras for testing and linting.
@@ -98,8 +108,13 @@ All services read settings via the `PROJECT_FYR_*` environment variables:
 | `PROJECT_FYR_ROLLOUT_TIMEOUT_SECONDS` | Max rollout age before marking failed | `900` |
 | `PROJECT_FYR_SLACK_BOT_TOKEN` | Bot token for Slack notifications | empty |
 | `PROJECT_FYR_SLACK_DEFAULT_CHANNEL` | Fallback Slack channel | empty |
+| `PROJECT_FYR_SLACK_API_URL` | Override Slack API URL (for testing with mock) | empty |
 | `PROJECT_FYR_OPENAI_API_KEY` | Required for the Investigator Agent | empty |
+| `PROJECT_FYR_OPENAI_API_BASE` | Azure OpenAI endpoint URL | empty |
+| `PROJECT_FYR_OPENAI_API_VERSION` | Azure OpenAI API version | empty |
+| `PROJECT_FYR_AZURE_DEPLOYMENT` | Azure OpenAI deployment name | empty |
 | `PROJECT_FYR_LANGCHAIN_MODEL_NAME` | LLM to use for the agent | `gpt-4o-mini` |
+| `PROJECT_FYR_PROMETHEUS_URL` | Prometheus server URL for metrics queries | empty |
 
 
 When deploying with External Secret Operator, set `secrets.existingSecret` (Helm value) so the watcher pod pulls credentials/keys from that Secret via `envFrom`.
@@ -122,9 +137,30 @@ kubectl annotate namespace payments \
   project-fyr/team="Payments SRE" --overwrite
 ```
 
+## Dashboard Web UI
+
+The dashboard provides a web interface for:
+- **Browsing rollouts** – view recent deployments with their status and analysis
+- **Detailed analysis** – see the full investigation report, likely cause, and recommended steps
+- **On-demand investigations** – manually trigger analysis for any deployment in any namespace
+- **Status filtering** – filter by failing deployments to focus on active issues
+
+Access the dashboard at the configured Ingress hostname or via port-forward:
+```bash
+kubectl port-forward -n project-fyr svc/project-fyr-dashboard 8000:8000
+# Open http://localhost:8000
+```
+
+The dashboard requires the same database connection as the watcher and analyzer but does not need LLM API keys unless you trigger on-demand investigations.
+
 ## Helm Deployment
 
-The chart in `helm/project-fyr` deploys the watcher/analyzer (with an optional MySQL dependency for dev/test clusters).
+The chart in `helm/project-fyr` deploys three services:
+- **Watcher** – monitors deployments and creates rollout records
+- **Analyzer** – investigates failures using the LangChain agent
+- **Dashboard** – web UI for browsing rollouts and triggering investigations
+
+An optional MySQL dependency is available for dev/test clusters.
 
 ### Quick start
 ```bash
@@ -138,15 +174,15 @@ helm upgrade --install project-fyr ./helm/project-fyr \
 Key values:
 - `watcher.*` – replica count, command/args, scheduling hints for the watcher.
 - `analyzer.*` – replica count, command/args, scheduling hints for the analyzer.
-- `config.*` – populates the ConfigMap consumed by the watcher, covering every `PROJECT_FYR_*` setting.
-- `serviceAccount.*` – watcher RBAC identity (set `create=false` + `name` to reuse an existing SA bound to the necessary cluster roles).
+- `dashboard.*` – replica count, command/args, scheduling hints for the dashboard.
+- `ingress.*` – expose the dashboard externally with optional TLS.
+- `config.*` – populates the ConfigMap consumed by all services, covering every `PROJECT_FYR_*` setting.
+- `serviceAccount.*` – RBAC identity (set `create=false` + `name` to reuse an existing SA).
 - `rbac.create` – automatically create ClusterRole and ClusterRoleBinding with required permissions (default: `true`).
-- `secrets.existingSecret` – reference to a Secret managed by External Secret Operator (or any other controller) that injects sensitive `PROJECT_FYR_*` values.
+- `secrets.existingSecret` – reference to a Secret managed by External Secret Operator that injects sensitive `PROJECT_FYR_*` values.
 - `metrics.serviceMonitor.*` – enable Prometheus ServiceMonitor for metrics discovery (requires Prometheus Operator).
 
-Mount production secrets via external `Secret` objects and reference them using `envFrom`/`extraEnv` patches if desired—the chart keeps ConfigMap values simple for local testing. Namespace annotations control Slack routing/metadata instead of a dedicated GitLab service.
-
-> The analyzer runs as a separate deployment/workload. Use `Dockerfile.analyzer` (or your own manifest) to run `python -m project_fyr.analyzer_service` pointing at the same database.
+Mount production secrets via external `Secret` objects and reference them using `envFrom`/`extraEnv` patches if desired—the chart keeps ConfigMap values simple for local testing. Namespace annotations control Slack routing/metadata.
 
 ### Optional MySQL dependency
 

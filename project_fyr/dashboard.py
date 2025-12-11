@@ -57,7 +57,10 @@ async def investigate(request: Request):
     
     agent = InvestigatorAgent(
         model_name=settings.langchain_model_name,
-        api_key=settings.openai_api_key
+        api_key=settings.openai_api_key,
+        api_base=settings.openai_api_base,
+        api_version=settings.openai_api_version,
+        azure_deployment=settings.azure_deployment
     )
     
     try:
@@ -79,14 +82,30 @@ async def investigate_page(request: Request):
     
     namespaces = [ns.metadata.name for ns in core.list_namespace().items]
     deployments = {}
+    deployment_statuses = {}
     
     for ns in namespaces:
         deps = v1.list_namespaced_deployment(ns).items
         if deps:
-            deployments[ns] = [d.metadata.name for d in deps]
+            deployments[ns] = []
+            for d in deps:
+                dep_name = d.metadata.name
+                deployments[ns].append(dep_name)
+                
+                # Check if deployment is healthy
+                ready_replicas = d.status.ready_replicas or 0
+                desired_replicas = d.spec.replicas or 0
+                is_failing = ready_replicas < desired_replicas
+                
+                deployment_statuses[f"{ns}/{dep_name}"] = {
+                    "failing": is_failing,
+                    "ready": ready_replicas,
+                    "desired": desired_replicas
+                }
             
     return templates.TemplateResponse("investigate.html", {
         "request": request, 
         "namespaces": namespaces, 
-        "deployments": deployments
+        "deployments": deployments,
+        "deployment_statuses": deployment_statuses
     })

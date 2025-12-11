@@ -108,6 +108,11 @@
             </select>
         </div>
         <div class="form-group">
+            <label>
+                <input type="checkbox" id="failingOnly" onchange="updateDeployments()"> Show only failing deployments
+            </label>
+        </div>
+        <div class="form-group">
             <label for="deployment">Deployment</label>
             <select id="deployment" disabled>
                 <option value="">Select Namespace First</option>
@@ -124,24 +129,44 @@
 
     <script>
         const deployments = {{ deployments | tojson }};
+        const statuses = {{ deployment_statuses | tojson }};
 
         function updateDeployments() {
             const nsSelect = document.getElementById('namespace');
             const depSelect = document.getElementById('deployment');
+            const failingOnlyCheckbox = document.getElementById('failingOnly');
             const btn = document.getElementById('investigateBtn');
             const ns = nsSelect.value;
+            const failingOnly = failingOnlyCheckbox.checked;
 
             depSelect.innerHTML = '<option value="">Select Deployment</option>';
             depSelect.disabled = !ns;
             btn.disabled = true;
 
             if (ns && deployments[ns]) {
-                deployments[ns].forEach(dep => {
+                let filteredDeployments = deployments[ns];
+                
+                if (failingOnly) {
+                    filteredDeployments = filteredDeployments.filter(dep => {
+                        const statusKey = `${ns}/${dep}`;
+                        return statuses[statusKey] && statuses[statusKey].failing;
+                    });
+                }
+                
+                filteredDeployments.forEach(dep => {
                     const option = document.createElement('option');
                     option.value = dep;
-                    option.textContent = dep;
+                    const statusKey = `${ns}/${dep}`;
+                    const status = statuses[statusKey];
+                    const statusText = status ? ` (${status.ready}/${status.desired})` : '';
+                    const failingIndicator = (status && status.failing) ? ' ⚠️' : '';
+                    option.textContent = dep + statusText + failingIndicator;
                     depSelect.appendChild(option);
                 });
+                
+                if (filteredDeployments.length === 0) {
+                    depSelect.innerHTML = '<option value="">No deployments found</option>';
+                }
             }
         }
 

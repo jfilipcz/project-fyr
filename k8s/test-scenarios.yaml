@@ -1,0 +1,172 @@
+---
+# Test Scenario: Missing ConfigMap
+# Expected: Deployment fails, pods crash with error about missing ConfigMap
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fyr-testing
+  annotations:
+    project-fyr/slack-channel: "#fyr-alerts"
+    project-fyr/team: "Platform Team"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: missing-configmap-app
+  namespace: fyr-testing
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: missing-configmap-app
+  template:
+    metadata:
+      labels:
+        app: missing-configmap-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:latest
+        env:
+        - name: CONFIG_FILE
+          valueFrom:
+            configMapKeyRef:
+              name: app-config-missing
+              key: config.json
+---
+# Test Scenario: Image Pull Error
+# Expected: Deployment fails, pods stuck in ImagePullBackOff
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-pull-error-app
+  namespace: fyr-testing
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: image-pull-error-app
+  template:
+    metadata:
+      labels:
+        app: image-pull-error-app
+    spec:
+      containers:
+      - name: app
+        image: nonexistent-registry.example.com/fake-image:latest
+        imagePullPolicy: Always
+---
+# Test Scenario: Port Mismatch
+# Expected: Deployment progresses but health checks fail, pods not ready
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: port-mismatch-app
+  namespace: fyr-testing
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: port-mismatch-app
+  template:
+    metadata:
+      labels:
+        app: port-mismatch-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080  # Wrong port - nginx runs on 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080  # Wrong port
+          initialDelaySeconds: 3
+          periodSeconds: 3
+---
+# Test Scenario: OOMKilled
+# Expected: Container crashes due to memory limit, restarts repeatedly
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oom-killed-app
+  namespace: fyr-testing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oom-killed-app
+  template:
+    metadata:
+      labels:
+        app: oom-killed-app
+    spec:
+      containers:
+      - name: memory-hog
+        image: polinux/stress
+        resources:
+          limits:
+            memory: "64Mi"
+          requests:
+            memory: "32Mi"
+        command: ["stress"]
+        args: ["--vm", "1", "--vm-bytes", "128M", "--vm-hang", "1"]
+---
+# Test Scenario: CrashLoopBackOff (Bad Command)
+# Expected: Container starts but immediately exits with error
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crash-loop-app
+  namespace: fyr-testing
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: crash-loop-app
+  template:
+    metadata:
+      labels:
+        app: crash-loop-app
+    spec:
+      containers:
+      - name: app
+        image: busybox:latest
+        command: ["/bin/sh"]
+        args: ["-c", "exit 1"]  # Always fails
+---
+# Test Scenario: Successful Deployment (Control)
+# Expected: Deployment succeeds, all pods ready
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: successful-app
+  namespace: fyr-testing
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: successful-app
+  template:
+    metadata:
+      labels:
+        app: successful-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 3
+          periodSeconds: 3
