@@ -11,12 +11,20 @@ from .models import Analysis
 
 
 class SlackNotifier:
-    def __init__(self, *, token: str | None, default_channel: str | None = None, mock_log_file: str | None = None):
+    def __init__(self, *, token: str | None, default_channel: str | None = None, mock_log_file: str | None = None, base_url: str | None = None):
         self._mock_mode = mock_log_file is not None
         self._mock_log_file = mock_log_file
         self._enabled = bool(token) or self._mock_mode
         self._default_channel = default_channel
-        self._client = WebClient(token=token) if token and not self._mock_mode else None
+        
+        # Create WebClient with custom base_url if provided (for mock service)
+        if token and not self._mock_mode:
+            if base_url:
+                self._client = WebClient(token=token, base_url=base_url)
+            else:
+                self._client = WebClient(token=token)
+        else:
+            self._client = None
 
     def send_analysis(
         self,

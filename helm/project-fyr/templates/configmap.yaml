@@ -12,8 +12,14 @@ data:
   PROJECT_FYR_ROLLOUT_TIMEOUT_SECONDS: {{ .Values.config.rolloutTimeoutSeconds | quote }}
   PROJECT_FYR_SLACK_BOT_TOKEN: {{ .Values.config.slackBotToken | quote }}
   PROJECT_FYR_SLACK_DEFAULT_CHANNEL: {{ .Values.config.slackDefaultChannel | quote }}
+  {{- if .Values.config.slackApiUrl }}
+  PROJECT_FYR_SLACK_API_URL: {{ .Values.config.slackApiUrl | quote }}
+  {{- end }}
   PROJECT_FYR_OPENAI_API_KEY: {{ .Values.config.openaiApiKey | quote }}
   PROJECT_FYR_LANGCHAIN_MODEL_NAME: {{ .Values.config.langchainModelName | quote }}
+  {{- if .Values.config.prometheusUrl }}
+  PROJECT_FYR_PROMETHEUS_URL: {{ .Values.config.prometheusUrl | quote }}
+  {{- end }}
   PROJECT_FYR_LOG_TAIL_SECONDS: {{ .Values.config.logTailSeconds | quote }}
   PROJECT_FYR_MAX_LOG_LINES: {{ .Values.config.maxLogLines | quote }}
   PROJECT_FYR_REDUCER_MAX_EVENTS: {{ .Values.config.reducerMaxEvents | quote }}

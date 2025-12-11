@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     )
     slack_bot_token: Optional[str] = Field(default=None)
     slack_default_channel: Optional[str] = Field(default=None)
+    slack_api_url: Optional[str] = Field(default=None, description="Override Slack API base URL (for testing)")
     openai_api_key: Optional[str] = Field(default=None)
     openai_api_base: Optional[str] = Field(default=None)
     openai_api_version: Optional[str] = Field(default=None)

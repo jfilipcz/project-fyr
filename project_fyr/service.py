@@ -242,6 +242,7 @@ class AnalysisWorker:
             token=config.slack_bot_token,
             default_channel=config.slack_default_channel,
             mock_log_file=config.slack_mock_log_file,
+            base_url=config.slack_api_url,
         )
 
     def loop(self):

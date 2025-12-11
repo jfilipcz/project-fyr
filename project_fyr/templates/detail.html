@@ -125,11 +125,20 @@
                 <h4>Severity</h4>
                 <p>{{ analysis.severity }}</p>
 
-                <h4>Probable Cause</h4>
-                <p>{{ analysis.probable_cause }}</p>
+                <h4>Likely Cause</h4>
+                <p>{{ analysis.likely_cause }}</p>
 
-                <h4>Remediation</h4>
-                <p>{{ analysis.remediation }}</p>
+                <h4>Recommended Steps</h4>
+                <ul>
+                    {% for step in analysis.recommended_steps %}
+                    <li>{{ step }}</li>
+                    {% endfor %}
+                </ul>
+
+                {% if analysis.triage_team %}
+                <h4>Triage Team</h4>
+                <p>{{ analysis.triage_team }} - {{ analysis.triage_reason }}</p>
+                {% endif %}
             </div>
         </div>
         {% endif %}

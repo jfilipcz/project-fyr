@@ -20,15 +20,15 @@ class Rollout(Base):
     __tablename__ = "rollouts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    cluster: Mapped[str] = mapped_column(String, index=True)
-    namespace: Mapped[str] = mapped_column(String, index=True)
-    deployment: Mapped[str] = mapped_column(String, index=True)
+    cluster: Mapped[str] = mapped_column(String(255), index=True)
+    namespace: Mapped[str] = mapped_column(String(255), index=True)
+    deployment: Mapped[str] = mapped_column(String(255), index=True)
     generation: Mapped[int] = mapped_column(Integer, index=True)
     status: Mapped[str] = mapped_column(SAEnum(RolloutStatus), default=RolloutStatus.PENDING)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    origin: Mapped[str] = mapped_column(String, default="k8s")
+    origin: Mapped[str] = mapped_column(String(50), default="k8s")
     metadata_json: Mapped[Optional[dict]] = mapped_column("metadata", JSON, default=dict)
     analysis_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     analysis_status: Mapped[AnalysisStatus] = mapped_column(
@@ -37,8 +37,8 @@ class Rollout(Base):
     notify_status: Mapped[NotifyStatus] = mapped_column(
         SAEnum(NotifyStatus), default=NotifyStatus.PENDING
     )
-    team: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    slack_channel: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    team: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    slack_channel: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
 
 class AnalysisRecord(Base):
@@ -46,8 +46,8 @@ class AnalysisRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     rollout_id: Mapped[int] = mapped_column(Integer, index=True)
-    model_name: Mapped[str] = mapped_column(String)
-    prompt_version: Mapped[str] = mapped_column(String)
+    model_name: Mapped[str] = mapped_column(String(255))
+    prompt_version: Mapped[str] = mapped_column(String(50))
     reduced_context: Mapped[dict] = mapped_column(JSON)
     analysis: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

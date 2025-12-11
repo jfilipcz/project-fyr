@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: fyr-test
+  name: fyr-testing
   annotations:
     project-fyr/slack-channel: "#local-test"
 ---
@@ -9,7 +9,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-unschedulable-app
-  namespace: fyr-test
+  namespace: fyr-testing
   annotations:
     project-fyr/enabled: "true"
 spec:
