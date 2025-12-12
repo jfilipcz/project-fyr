@@ -137,6 +137,30 @@ kubectl annotate namespace payments \
   project-fyr/team="Payments SRE" --overwrite
 ```
 
+### Deployment opt-in
+
+**Important:** Project Fyr only monitors deployments that have the label `project-fyr/enabled=true`. This is an opt-in mechanism to avoid monitoring all deployments in your cluster.
+
+Add the label to deployments you want to monitor:
+
+```bash
+# Label an existing deployment
+kubectl label deployment my-app -n my-namespace project-fyr/enabled=true
+
+# Or add it to your deployment manifest
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  namespace: my-namespace
+  labels:
+    project-fyr/enabled: "true"
+spec:
+  # ... rest of deployment spec
+```
+
+Without this label, the watcher will ignore the deployment even if the namespace has proper annotations.
+
 ## Dashboard Web UI
 
 The dashboard provides a web interface for:

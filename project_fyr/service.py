@@ -656,6 +656,7 @@ class WatcherService:
             logger.info("Loaded kube config")
 
         cluster = self._config.k8s_cluster_name
+        logger.info(f"Starting WatcherService for cluster: {cluster}")
         threads: list[threading.Thread] = []
         watch_thread = threading.Thread(
             target=self._watch_loop,
@@ -670,9 +671,12 @@ class WatcherService:
             name="project-fyr-reconcile",
         )
         threads.extend([watch_thread, reconcile_thread])
+        logger.info(f"Starting {len(threads)} threads: watch and reconcile")
         for t in threads:
             t.start()
+            logger.info(f"Started thread: {t.name}")
 
+        logger.info("All threads started, entering main loop")
         for t in threads:
             t.join()
 
@@ -682,20 +686,29 @@ class WatcherService:
         namespace_cache = NamespaceMetadataCache(core_v1)
         w = watch.Watch()
         selector = "project-fyr/enabled=true"
+        logger.info(f"Starting watch loop with label selector: {selector}")
+        iteration = 0
         while True:
             try:
+                iteration += 1
+                logger.info(f"Watch loop iteration #{iteration}, initiating stream...")
                 stream = w.stream(
                     v1_apps.list_deployment_for_all_namespaces,
                     label_selector=selector,
                     timeout_seconds=60,
                 )
+                logger.info(f"Stream created, entering event loop...")
+                event_count = 0
                 for event in stream:
+                    event_count += 1
                     dep = event["object"]
                     etype = event["type"]
+                    logger.info(f"Event #{event_count}: type={etype}, deployment={dep.metadata.name}, namespace={dep.metadata.namespace}")
                     ns_meta = namespace_cache.get(dep.metadata.namespace)
                     handle_deployment_event(dep, etype, self._repo, cluster, namespace_metadata=ns_meta)
+                logger.info(f"Watch stream ended after {event_count} events, restarting...")
             except Exception as exc:
-                logger.error(f"watch error: {exc}")
+                logger.error(f"watch error: {exc}", exc_info=True)
                 time.sleep(2)
 
     def _reconcile_loop(self, cluster: str):
