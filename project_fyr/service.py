@@ -936,7 +936,6 @@ class AnalysisWorker:
             time.sleep(15)
 
 
-
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     service = WatcherService()
