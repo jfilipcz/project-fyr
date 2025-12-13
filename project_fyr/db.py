@@ -53,6 +53,56 @@ class AnalysisRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AlertBatchRecord(Base):
+    __tablename__ = "alert_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    primary_fingerprint: Mapped[str] = mapped_column(String(255), index=True)
+    namespace: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    service: Mapped[Optional[str]] = mapped_column(String(255))
+    window_start: Mapped[datetime] = mapped_column(DateTime)
+    window_end: Mapped[datetime] = mapped_column(DateTime)
+    context_summary: Mapped[str] = mapped_column(String)  # JSON or text summary
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AlertRecord(Base):
+    __tablename__ = "alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(255), index=True)
+    status: Mapped[str] = mapped_column(String(50))
+    starts_at: Mapped[datetime] = mapped_column(DateTime)
+    ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    labels: Mapped[dict] = mapped_column(JSON)
+    annotations: Mapped[dict] = mapped_column(JSON)
+    payload: Mapped[dict] = mapped_column(JSON)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # Batching
+    batched: Mapped[bool] = mapped_column(Integer, default=0)  # SQLite bool
+    batch_id: Mapped[Optional[int]] = mapped_column(Integer, index=True, nullable=True)
+
+
+class InvestigationJob(Base):
+    __tablename__ = "investigation_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    type: Mapped[str] = mapped_column(String(50))  # rollout | alert
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    
+    # Polymorphic-ish FKs
+    rollout_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    alert_batch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    
+    analysis_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+
 def init_db(database_url: str):
     engine = create_engine(database_url, future=True)
     Base.metadata.create_all(engine)
@@ -172,7 +222,7 @@ class RolloutRepo:
         team: Optional[str] = None,
         slack_channel: Optional[str] = None,
     ) -> None:
-        values: dict = {}
+        values: dict[str, Any] = {}
         if metadata_json is not None:
             values["metadata_json"] = metadata_json
         if team is not None:
@@ -185,3 +235,79 @@ class RolloutRepo:
         with self.session() as s:
             s.execute(stmt)
             s.commit()
+
+
+class AlertRepo:
+    def __init__(self, engine):
+        self._engine = engine
+
+    @contextmanager
+    def session(self) -> Iterator[Session]:
+        with Session(self._engine) as session:
+            yield session
+
+    def create_alert(self, **kwargs) -> AlertRecord:
+        alert = AlertRecord(**kwargs)
+        with self.session() as s:
+            s.add(alert)
+            s.commit()
+            s.refresh(alert)
+        return alert
+
+    def get_unbatched_alerts(self, window_start: datetime) -> list[AlertRecord]:
+        # Get alerts received after window_start that are not yet batched
+        stmt = select(AlertRecord).where(
+            AlertRecord.batched == 0,
+            AlertRecord.received_at >= window_start
+        ).order_by(AlertRecord.received_at.asc())
+        
+        with self.session() as s:
+            return list(s.scalars(stmt))
+
+    def create_batch(self, alerts: list[AlertRecord], summary: str, **kwargs) -> AlertBatchRecord:
+        with self.session() as s:
+            batch = AlertBatchRecord(context_summary=summary, **kwargs)
+            s.add(batch)
+            s.flush()
+            
+            # Update alerts
+            alert_ids = [a.id for a in alerts]
+            stmt = update(AlertRecord).where(AlertRecord.id.in_(alert_ids)).values(
+                batched=True,
+                batch_id=batch.id
+            )
+            s.execute(stmt)
+            
+            # Create job
+            job = InvestigationJob(
+                type="alert",
+                alert_batch_id=batch.id,
+                status="pending"
+            )
+            s.add(job)
+            
+            s.commit()
+            s.refresh(batch)
+            return batch
+
+    def get_pending_jobs(self) -> list[InvestigationJob]:
+        stmt = select(InvestigationJob).where(InvestigationJob.status == "pending")
+        with self.session() as s:
+            return list(s.scalars(stmt))
+
+    def get_batch(self, batch_id: int) -> Optional[AlertBatchRecord]:
+        stmt = select(AlertBatchRecord).where(AlertBatchRecord.id == batch_id)
+        with self.session() as s:
+            return s.scalars(stmt).first()
+
+    def get_batch_alerts(self, batch_id: int) -> list[AlertRecord]:
+        stmt = select(AlertRecord).where(AlertRecord.batch_id == batch_id)
+        with self.session() as s:
+            return list(s.scalars(stmt))
+    
+    def update_job_status(self, job_id: int, status: str, **timestamps) -> None:
+        stmt = update(InvestigationJob).where(InvestigationJob.id == job_id).values(status=status, **timestamps)
+        with self.session() as s:
+            s.execute(stmt)
+            s.commit()
+
