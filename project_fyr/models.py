@@ -71,5 +71,35 @@ class Analysis(BaseModel):
     severity: str = Field(default="medium")
     details: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    triage_team: Optional[str] = None
-    triage_reason: Optional[str] = None
+    triage_team: Optional[str] = Field(default=None)
+    triage_reason: Optional[str] = Field(default=None)
+
+
+class Alert(BaseModel):
+    fingerprint: str
+    status: str
+    starts_at: datetime
+    ends_at: Optional[datetime] = None
+    labels: dict[str, str]
+    annotations: dict[str, str]
+    generator_url: Optional[str] = None
+
+
+class AlertBatch(BaseModel):
+    id: int
+    summary: str
+    alerts: list[Alert]
+    created_at: datetime
+
+
+class JobType(str, Enum):
+    ROLLOUT = "rollout"
+    ALERT = "alert"
+
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+

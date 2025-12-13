@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Fyr - Alert Batch #{{ batch.id }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+
+<body class="bg-gray-100">
+    <nav class="bg-white shadow mb-8">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex">
+                    <div class="flex-shrink-0 flex items-center">
+                        <h1 class="text-xl font-bold text-gray-800">Project Fyr</h1>
+                    </div>
+                    <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
+                        <a href="/"
+                            class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Rollouts
+                        </a>
+                        <a href="/investigate"
+                            class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            On-Demand
+                        </a>
+                        <a href="/alerts"
+                            class="border-indigo-500 text-gray-900 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Alerts
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="mb-6">
+            <a href="/alerts" class="text-indigo-600 hover:text-indigo-900">← Back to Alerts</a>
+        </div>
+
+        <div class="bg-white shadow overflow-hidden sm:rounded-lg mb-8">
+            <div class="px-4 py-5 sm:px-6">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">
+                    Alert Batch #{{ batch.id }}
+                </h3>
+                <p class="mt-1 max-w-2xl text-sm text-gray-500">
+                    {{ batch.namespace }} / {{ batch.service }}
+                </p>
+            </div>
+            <div class="border-t border-gray-200 px-4 py-5 sm:p-0">
+                <dl class="sm:divide-y sm:divide-gray-200">
+                    <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                        <dt class="text-sm font-medium text-gray-500">Summary</dt>
+                        <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">{{ batch.context_summary }}</dd>
+                    </div>
+                    <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                        <dt class="text-sm font-medium text-gray-500">Created At</dt>
+                        <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">{{ batch.created_at }}</dd>
+                    </div>
+                    <div class="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                        <dt class="text-sm font-medium text-gray-500">Alerts</dt>
+                        <dd class="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                            <ul class="border border-gray-200 rounded-md divide-y divide-gray-200">
+                                {% for alert in alerts %}
+                                <li class="pl-3 pr-4 py-3 flex items-center justify-between text-sm">
+                                    <div class="w-0 flex-1 flex items-center">
+                                        <span class="ml-2 flex-1 w-0 truncate">
+                                            <span class="font-bold">{{ alert.labels.get('alertname') }}</span>
+                                            <span class="text-gray-500 ml-2">{{ alert.status }}</span>
+                                            <br>
+                                            <span class="text-xs text-gray-400">{{ alert.annotations.get('description')
+                                                or alert.annotations.get('message') }}</span>
+                                        </span>
+                                    </div>
+                                    <div class="ml-4 flex-shrink-0">
+                                        <span class="font-mono text-xs text-gray-500">{{ alert.starts_at }}</span>
+                                    </div>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        </dd>
+                    </div>
+                </dl>
+            </div>
+        </div>
+
+        {% if job %}
+        <div class="bg-white shadow overflow-hidden sm:rounded-lg">
+            <div class="px-4 py-5 sm:px-6">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">
+                    Investigation Result
+                </h3>
+                <p class="mt-1 max-w-2xl text-sm text-gray-500">
+                    Status: {{ job.status }}
+                </p>
+            </div>
+            <div class="border-t border-gray-200 px-4 py-5 sm:px-6">
+                {% if job.status == 'done' %}
+                <div class="prose max-w-none">
+                    <p class="text-gray-500 italic">Analysis content is not directly linked in this MVP version. Check
+                        Slack or logs.</p>
+                    <!-- In a real implementation, we would link AnalysisRecord here -->
+                </div>
+                {% else %}
+                <p class="text-gray-500">Investigation is {{ job.status }}...</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</body>
+
+</html>

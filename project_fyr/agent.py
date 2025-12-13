@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from langchain.agents import create_agent
+from langchain.agents import create_openai_tools_agent, AgentExecutor
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from prometheus_client import Histogram, Counter
 
@@ -119,16 +120,17 @@ class InvestigatorAgent:
             ]
             
             # Use the new create_agent API with recursion limit
-            self._agent = create_agent(
-                model=llm,
-                tools=tools,
-                system_prompt=AGENT_SYSTEM_PROMPT,
-                debug=True
-            ).with_config({"recursion_limit": 1000})
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", AGENT_SYSTEM_PROMPT),
+                MessagesPlaceholder(variable_name="messages"),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
+            ])
+            agent = create_openai_tools_agent(llm, tools, prompt)
+            self._agent = AgentExecutor(agent=agent, tools=tools, verbose=True, max_iterations=20)
         else:
             self._agent = None
 
-    def investigate(self, deployment: str, namespace: str) -> Analysis:
+    def investigate(self, deployment: str, namespace: str, alert_context: dict[str, Any] | None = None) -> Analysis:
         if self._model_name == "mock":
             AGENT_INVESTIGATIONS.labels(status='mock').inc()
             return Analysis(
@@ -150,6 +152,17 @@ class InvestigatorAgent:
         try:
             # Use the new agent API - it expects messages format
             user_message = f"Investigate the deployment '{deployment}' in namespace '{namespace}'."
+            
+            if alert_context:
+                user_message += f"\n\nCONTEXT: The investigation was triggered by the following alerts:\n{alert_context.get('summary', '')}\n"
+                alerts = alert_context.get("alerts", [])
+                if alerts:
+                    user_message += "Active Alerts:\n"
+                    for a in alerts:
+                        user_message += f"- {a.get('name')} ({a.get('severity')}): {a.get('description')}\n"
+                user_message += "\nPlease prioritize investigating the root cause of these alerts."
+            
+            # Invoke the agent with the new format
             
             # Invoke the agent with the new format
             result = self._agent.invoke(
