@@ -128,7 +128,7 @@ class InvestigatorAgent:
         else:
             self._agent = None
 
-    def investigate(self, deployment: str, namespace: str) -> Analysis:
+    def investigate(self, deployment: str, namespace: str, alert_context: dict[str, Any] | None = None) -> Analysis:
         if self._model_name == "mock":
             AGENT_INVESTIGATIONS.labels(status='mock').inc()
             return Analysis(
@@ -150,6 +150,17 @@ class InvestigatorAgent:
         try:
             # Use the new agent API - it expects messages format
             user_message = f"Investigate the deployment '{deployment}' in namespace '{namespace}'."
+            
+            if alert_context:
+                user_message += f"\n\nCONTEXT: The investigation was triggered by the following alerts:\n{alert_context.get('summary', '')}\n"
+                alerts = alert_context.get("alerts", [])
+                if alerts:
+                    user_message += "Active Alerts:\n"
+                    for a in alerts:
+                        user_message += f"- {a.get('name')} ({a.get('severity')}): {a.get('description')}\n"
+                user_message += "\nPlease prioritize investigating the root cause of these alerts."
+            
+            # Invoke the agent with the new format
             
             # Invoke the agent with the new format
             result = self._agent.invoke(
