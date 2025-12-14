@@ -5,7 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from langchain.agents.agent import AgentExecutor
+try:
+    from langchain.agents.agent import AgentExecutor
+except (ImportError, ModuleNotFoundError):
+    from langchain.agents import AgentExecutor
+
 from langchain.agents.openai_tools.base import create_openai_tools_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
@@ -162,8 +166,6 @@ class InvestigatorAgent:
                     for a in alerts:
                         user_message += f"- {a.get('name')} ({a.get('severity')}): {a.get('description')}\n"
                 user_message += "\nPlease prioritize investigating the root cause of these alerts."
-            
-            # Invoke the agent with the new format
             
             # Invoke the agent with the new format
             result = self._agent.invoke(
