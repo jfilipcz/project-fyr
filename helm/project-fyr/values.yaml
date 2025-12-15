@@ -132,3 +132,26 @@ mysql:
   primary:
     persistence:
       enabled: false
+
+# Slack Mock (for development/testing)
+# Provides a mock Slack API endpoint to test notifications without real Slack
+slackMock:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: python
+    tag: "3.12-slim"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

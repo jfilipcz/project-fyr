@@ -32,15 +32,6 @@ A single `Dockerfile` builds all three services:
 - **Analyzer**: `python -m project_fyr.analyzer_service`
 - **Dashboard**: `python -m project_fyr.dashboard`
 
-You can use the provided `Makefile`:
-
-```bash
-make build TAG=dev
-make push TAG=1.0.0 REGISTRY=ghcr.io/my-org
-# cross-compile for specific platform
-make build TAG=dev PLATFORM=linux/amd64
-```
-
 Example build/run:
 
 ```bash
@@ -185,6 +176,7 @@ The chart in `helm/project-fyr` deploys three services:
 - **Dashboard** – web UI for browsing rollouts and triggering investigations
 
 An optional MySQL dependency is available for dev/test clusters.
+An optional Slack mock service is available for testing without real Slack credentials.
 
 ### Quick start
 ```bash
@@ -205,6 +197,8 @@ Key values:
 - `rbac.create` – automatically create ClusterRole and ClusterRoleBinding with required permissions (default: `true`).
 - `secrets.existingSecret` – reference to a Secret managed by External Secret Operator that injects sensitive `PROJECT_FYR_*` values.
 - `metrics.serviceMonitor.*` – enable Prometheus ServiceMonitor for metrics discovery (requires Prometheus Operator).
+- `mysql.*` – enable bundled MySQL chart for development (disabled by default).
+- `slackMock.*` – enable mock Slack API service for testing (disabled by default).
 
 Mount production secrets via external `Secret` objects and reference them using `envFrom`/`extraEnv` patches if desired—the chart keeps ConfigMap values simple for local testing. Namespace annotations control Slack routing/metadata.
 
@@ -231,6 +225,35 @@ helm upgrade --install project-fyr ./helm/project-fyr -f dev-values.yaml
 ```
 
 The dependency is disabled by default; in production you should continue pointing `PROJECT_FYR_DATABASE_URL` at your managed database and rely on `secrets.existingSecret` (ESO) to mount credentials.
+
+### Optional Slack Mock
+
+For development and testing without a real Slack workspace, you can enable the built-in Slack mock service:
+
+```bash
+cat <<'VALUES' > dev-values.yaml
+slackMock:
+  enabled: true
+
+config:
+  # Point to the mock service instead of real Slack API
+  slackApiUrl: "http://{{ .Release.Name }}-slack-mock:8080"
+  slackBotToken: "xoxb-mock-token"
+  slackDefaultChannel: "#test"
+VALUES
+
+helm upgrade --install project-fyr ./helm/project-fyr -f dev-values.yaml
+```
+
+The mock service will:
+- Accept all Slack API calls and return success responses
+- Log formatted notification messages to stdout (visible in pod logs)
+- Run on port 8080 with minimal resource requirements
+
+This is useful for:
+- Testing Project Fyr without Slack credentials
+- Verifying notification formatting and content
+- Development environments where Slack integration isn't needed
 
 ## Prometheus Metrics
 

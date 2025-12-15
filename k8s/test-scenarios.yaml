@@ -4,7 +4,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: fyr-testing
+  name: fyr-testREADME.md ing
   annotations:
     project-fyr/slack-channel: "#fyr-alerts"
     project-fyr/team: "Platform Team"
