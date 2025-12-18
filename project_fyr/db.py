@@ -103,6 +103,16 @@ class InvestigationJob(Base):
 
 
 
+class AlertStateRecord(Base):
+    __tablename__ = "alert_states"
+
+    fingerprint: Mapped[str] = mapped_column(String(255), primary_key=True)
+    status: Mapped[str] = mapped_column(String(50))
+    last_received_at: Mapped[datetime] = mapped_column(DateTime)
+    last_investigated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 def init_db(database_url: str):
     engine = create_engine(database_url, future=True)
     Base.metadata.create_all(engine)
@@ -310,4 +320,40 @@ class AlertRepo:
         with self.session() as s:
             s.execute(stmt)
             s.commit()
+
+    def get_state(self, fingerprint: str) -> Optional[AlertStateRecord]:
+        stmt = select(AlertStateRecord).where(AlertStateRecord.fingerprint == fingerprint)
+        with self.session() as s:
+            return s.scalars(stmt).first()
+
+    def update_state(
+        self,
+        fingerprint: str,
+        status: str,
+        now: datetime,
+        investigated: bool = False
+    ) -> AlertStateRecord:
+        with self.session() as s:
+            state = s.scalars(
+                select(AlertStateRecord).where(AlertStateRecord.fingerprint == fingerprint)
+            ).first()
+
+            if not state:
+                state = AlertStateRecord(
+                    fingerprint=fingerprint,
+                    status=status,
+                    last_received_at=now,
+                    last_investigated_at=now if investigated else None
+                )
+                s.add(state)
+            else:
+                state.status = status
+                state.last_received_at = now
+                if investigated:
+                    state.last_investigated_at = now
+            
+            s.commit()
+            s.refresh(state)
+            return state
+
 

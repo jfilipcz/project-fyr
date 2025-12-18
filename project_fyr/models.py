@@ -103,3 +103,10 @@ class JobStatus(str, Enum):
     DONE = "done"
     FAILED = "failed"
 
+
+class AlertState(BaseModel):
+    fingerprint: str
+    status: str
+    last_received_at: datetime
+    last_investigated_at: Optional[datetime] = None
+    created_at: datetime
