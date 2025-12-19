@@ -5,13 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-try:
-    from langchain.agents.agent import AgentExecutor
-except (ImportError, ModuleNotFoundError):
-    from langchain.agents import AgentExecutor
-
-from langchain.agents.openai_tools.base import create_openai_tools_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 from prometheus_client import Histogram, Counter
 
@@ -125,13 +119,12 @@ class InvestigatorAgent:
             ]
             
             # Use the new create_agent API with recursion limit
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", AGENT_SYSTEM_PROMPT),
-                MessagesPlaceholder(variable_name="messages"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"),
-            ])
-            agent = create_openai_tools_agent(llm, tools, prompt)
-            self._agent = AgentExecutor(agent=agent, tools=tools, verbose=True, max_iterations=20)
+            self._agent = create_agent(
+                model=llm,
+                tools=tools,
+                system_prompt=AGENT_SYSTEM_PROMPT,
+                debug=True
+            ).with_config({"recursion_limit": 1000})
         else:
             self._agent = None
 
