@@ -5,10 +5,12 @@ from sqlalchemy.orm import Session
 from pathlib import Path
 from typing import Iterator
 
-from .db import init_db, RolloutRepo, Rollout, AnalysisRecord
+from .db import init_db, RolloutRepo, Rollout, AnalysisRecord, AlertRepo
 from .config import settings
+from .webhook import router as webhook_router
 
 app = FastAPI(title="Project Fyr Dashboard")
+app.include_router(webhook_router)
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -17,6 +19,10 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 def get_repo() -> Iterator[RolloutRepo]:
     engine = init_db(settings.database_url)
     yield RolloutRepo(engine)
+
+def get_alert_repo() -> Iterator[AlertRepo]:
+    engine = init_db(settings.database_url)
+    yield AlertRepo(engine)
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, repo: RolloutRepo = Depends(get_repo)):
@@ -109,3 +115,48 @@ async def investigate_page(request: Request):
         "deployments": deployments,
         "deployment_statuses": deployment_statuses
     })
+
+@app.get("/alerts", response_class=HTMLResponse)
+async def alerts_index(request: Request, repo: AlertRepo = Depends(get_alert_repo)):
+    # We need to fetch batches. AlertRepo doesn't have list_batches yet.
+    # Let's add it ad-hoc or assume we added it.
+    # Wait, I didn't add list_batches to AlertRepo in previous step.
+    # I should add it now or use direct session.
+    # Let's use direct session for now to avoid another file edit if possible, 
+    # but cleaner to add to Repo.
+    # Actually, I can just add the method to AlertRepo in db.py first?
+    # Or just do a query here.
+    
+    from sqlalchemy import select, desc
+    from .db import AlertBatchRecord
+    
+    stmt = select(AlertBatchRecord).order_by(AlertBatchRecord.created_at.desc()).limit(50)
+    with repo.session() as s:
+        batches = s.scalars(stmt).all()
+        
+    return templates.TemplateResponse("alerts.html", {"request": request, "batches": batches})
+
+@app.get("/alerts/{batch_id}", response_class=HTMLResponse)
+async def alert_detail(request: Request, batch_id: int, repo: AlertRepo = Depends(get_alert_repo)):
+    batch = repo.get_batch(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+        
+    alerts = repo.get_batch_alerts(batch_id)
+    
+    # Get job status
+    # We need to find the job for this batch
+    from .db import InvestigationJob
+    from sqlalchemy import select
+    
+    stmt = select(InvestigationJob).where(InvestigationJob.alert_batch_id == batch_id)
+    with repo.session() as s:
+        job = s.scalars(stmt).first()
+        
+    return templates.TemplateResponse("alert_detail.html", {
+        "request": request, 
+        "batch": batch, 
+        "alerts": alerts,
+        "job": job
+    })
+

@@ -19,7 +19,13 @@ class Settings(BaseSettings):
     azure_deployment: Optional[str] = Field(default=None)
     langchain_model_name: str = Field(default="gpt-4o-mini")
     k8s_cluster_name: str = Field(default="ci-cluster")
+    k8s_cluster_name: str = Field(default="ci-cluster")
     rollout_timeout_seconds: int = Field(default=15 * 60)
+
+    # Alert Webhook & Correlation
+    alert_webhook_secret: Optional[str] = Field(default=None)
+    alert_correlation_window_seconds: int = Field(default=300)
+    alert_batch_min_count: int = Field(default=1)
 
     slack_mock_log_file: Optional[str] = Field(default=None)
     
