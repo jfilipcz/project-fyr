@@ -1,0 +1,43 @@
+---
+# Example: Enable Fyr monitoring for all deployments in a namespace
+# Apply with: kubectl apply -f namespace-example.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: my-monitored-namespace
+  annotations:
+    # This enables Fyr monitoring for ALL deployments in this namespace
+    # No need to add project-fyr/enabled=true label to individual deployments
+    project-fyr/enabled: "true"
+    
+    # Optional: Set default Slack channel for this namespace
+    project-fyr/slack-channel: "#my-team-alerts"
+    
+    # Optional: Set team ownership for this namespace
+    project-fyr/team: "Platform Team"
+---
+# Example deployment in the above namespace
+# This will be automatically monitored by Fyr (no label needed)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+  namespace: my-monitored-namespace
+  # Note: No project-fyr/enabled label needed!
+  labels:
+    app: my-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:latest
+        ports:
+        - containerPort: 80

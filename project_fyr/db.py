@@ -9,7 +9,7 @@ from typing import Iterator, Optional
 from sqlalchemy import JSON, DateTime, Enum as SAEnum, Integer, String, create_engine, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from .models import Analysis, AnalysisStatus, NotifyStatus, ReducedContext, RolloutStatus
+from .models import Analysis, AnalysisStatus, NotifyStatus, ReducedContext, RolloutStatus, NamespaceIncidentType, NamespaceIncidentStatus
 
 
 class Base(DeclarativeBase):
@@ -62,7 +62,7 @@ class AlertBatchRecord(Base):
     service: Mapped[Optional[str]] = mapped_column(String(255))
     window_start: Mapped[datetime] = mapped_column(DateTime)
     window_end: Mapped[datetime] = mapped_column(DateTime)
-    context_summary: Mapped[str] = mapped_column(String)  # JSON or text summary
+    context_summary: Mapped[str] = mapped_column(String(2000))  # JSON or text summary
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -88,12 +88,13 @@ class InvestigationJob(Base):
     __tablename__ = "investigation_jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    type: Mapped[str] = mapped_column(String(50))  # rollout | alert
+    type: Mapped[str] = mapped_column(String(50))  # rollout | alert | namespace
     status: Mapped[str] = mapped_column(String(50), default="pending")
     
     # Polymorphic-ish FKs
     rollout_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     alert_batch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    namespace_incident_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
     analysis_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     
@@ -110,6 +111,29 @@ class AlertStateRecord(Base):
     status: Mapped[str] = mapped_column(String(50))
     last_received_at: Mapped[datetime] = mapped_column(DateTime)
     last_investigated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class NamespaceIncidentRecord(Base):
+    __tablename__ = "namespace_incidents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cluster: Mapped[str] = mapped_column(String(255), index=True)
+    namespace: Mapped[str] = mapped_column(String(255), index=True)
+    incident_type: Mapped[str] = mapped_column(SAEnum(NamespaceIncidentType))
+    status: Mapped[str] = mapped_column(SAEnum(NamespaceIncidentStatus), default=NamespaceIncidentStatus.ACTIVE)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    metadata_json: Mapped[Optional[dict]] = mapped_column("metadata", JSON, default=dict)
+    analysis_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    analysis_status: Mapped[AnalysisStatus] = mapped_column(
+        SAEnum(AnalysisStatus), default=AnalysisStatus.PENDING
+    )
+    notify_status: Mapped[NotifyStatus] = mapped_column(
+        SAEnum(NotifyStatus), default=NotifyStatus.PENDING
+    )
+    team: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    slack_channel: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -165,6 +189,43 @@ class RolloutRepo:
 
     def list_recent(self, limit: int = 50) -> list[Rollout]:
         stmt = select(Rollout).order_by(Rollout.id.desc()).limit(limit)
+        with self.session() as s:
+            return list(s.scalars(stmt))
+
+    def list_by_status(self, status: str, limit: int = 50) -> list[Rollout]:
+        """List rollouts filtered by status."""
+        # Convert string to RolloutStatus enum
+        try:
+            status_enum = RolloutStatus[status.upper()]
+        except (KeyError, AttributeError):
+            # If invalid status, return empty list
+            return []
+        
+        stmt = select(Rollout).where(
+            Rollout.status == status_enum
+        ).order_by(Rollout.id.desc()).limit(limit)
+        with self.session() as s:
+            return list(s.scalars(stmt))
+
+    def list_by_namespace(self, namespace: str, limit: int = 50) -> list[Rollout]:
+        """List rollouts filtered by namespace."""
+        stmt = select(Rollout).where(
+            Rollout.namespace == namespace
+        ).order_by(Rollout.id.desc()).limit(limit)
+        with self.session() as s:
+            return list(s.scalars(stmt))
+
+    def list_by_status_and_namespace(self, status: str, namespace: str, limit: int = 50) -> list[Rollout]:
+        """List rollouts filtered by both status and namespace."""
+        try:
+            status_enum = RolloutStatus[status.upper()]
+        except (KeyError, AttributeError):
+            return []
+        
+        stmt = select(Rollout).where(
+            Rollout.status == status_enum,
+            Rollout.namespace == namespace
+        ).order_by(Rollout.id.desc()).limit(limit)
         with self.session() as s:
             return list(s.scalars(stmt))
 
@@ -304,6 +365,15 @@ class AlertRepo:
         stmt = select(InvestigationJob).where(InvestigationJob.status == "pending")
         with self.session() as s:
             return list(s.scalars(stmt))
+    
+    def get_pending_namespace_jobs(self) -> list[InvestigationJob]:
+        """Get pending investigation jobs for namespace incidents."""
+        stmt = select(InvestigationJob).where(
+            InvestigationJob.status == "pending",
+            InvestigationJob.type == "namespace"
+        )
+        with self.session() as s:
+            return list(s.scalars(stmt))
 
     def get_batch(self, batch_id: int) -> Optional[AlertBatchRecord]:
         stmt = select(AlertBatchRecord).where(AlertBatchRecord.id == batch_id)
@@ -355,5 +425,164 @@ class AlertRepo:
             s.commit()
             s.refresh(state)
             return state
+
+
+class NamespaceIncidentRepo:
+    def __init__(self, engine):
+        self._engine = engine
+
+    @contextmanager
+    def session(self) -> Iterator[Session]:
+        with Session(self._engine) as session:
+            yield session
+
+    def create(self, **kwargs) -> NamespaceIncidentRecord:
+        incident = NamespaceIncidentRecord(**kwargs)
+        with self.session() as s:
+            s.add(incident)
+            s.commit()
+            s.refresh(incident)
+        return incident
+
+    def get_active_incident(
+        self, cluster: str, namespace: str, incident_type: str
+    ) -> Optional[NamespaceIncidentRecord]:
+        """Get active incident of a specific type for a namespace."""
+        from .models import NamespaceIncidentType
+        try:
+            incident_type_enum = NamespaceIncidentType[incident_type.upper()]
+        except (KeyError, AttributeError):
+            return None
+        
+        stmt = select(NamespaceIncidentRecord).where(
+            NamespaceIncidentRecord.cluster == cluster,
+            NamespaceIncidentRecord.namespace == namespace,
+            NamespaceIncidentRecord.incident_type == incident_type_enum,
+            NamespaceIncidentRecord.status.in_([
+                NamespaceIncidentStatus.ACTIVE,
+                NamespaceIncidentStatus.INVESTIGATING
+            ]),
+        )
+        with self.session() as s:
+            return s.scalars(stmt).first()
+
+    def list_active(self, cluster: str) -> list[NamespaceIncidentRecord]:
+        """List all active incidents in a cluster."""
+        stmt = select(NamespaceIncidentRecord).where(
+            NamespaceIncidentRecord.cluster == cluster,
+            NamespaceIncidentRecord.status.in_([
+                NamespaceIncidentStatus.ACTIVE,
+                NamespaceIncidentStatus.INVESTIGATING
+            ]),
+        )
+        with self.session() as s:
+            return list(s.scalars(stmt))
+
+    def list_recent(self, limit: int = 50) -> list[NamespaceIncidentRecord]:
+        stmt = select(NamespaceIncidentRecord).order_by(NamespaceIncidentRecord.id.desc()).limit(limit)
+        with self.session() as s:
+            return list(s.scalars(stmt))
+
+    def get_by_id(self, incident_id: int) -> Optional[NamespaceIncidentRecord]:
+        stmt = select(NamespaceIncidentRecord).where(NamespaceIncidentRecord.id == incident_id)
+        with self.session() as s:
+            return s.scalars(stmt).first()
+
+    def resolve(self, incident_id: int) -> None:
+        """Mark incident as resolved."""
+        stmt = (
+            update(NamespaceIncidentRecord)
+            .where(NamespaceIncidentRecord.id == incident_id)
+            .values(
+                status=NamespaceIncidentStatus.RESOLVED,
+                resolved_at=datetime.utcnow()
+            )
+        )
+        with self.session() as s:
+            s.execute(stmt)
+            s.commit()
+
+    def update_status(self, incident_id: int, new_status: NamespaceIncidentStatus) -> None:
+        stmt = (
+            update(NamespaceIncidentRecord)
+            .where(NamespaceIncidentRecord.id == incident_id)
+            .values(status=new_status)
+        )
+        with self.session() as s:
+            s.execute(stmt)
+            s.commit()
+
+    def update_notify_status(self, incident_id: int, new_status: NotifyStatus) -> None:
+        stmt = update(NamespaceIncidentRecord).where(
+            NamespaceIncidentRecord.id == incident_id
+        ).values(notify_status=new_status)
+        with self.session() as s:
+            s.execute(stmt)
+            s.commit()
+
+    def append_analysis(
+        self,
+        incident_id: int,
+        *,
+        reduced_context: dict,
+        analysis: Analysis,
+        model_name: str,
+        prompt_version: str = "v1",
+    ) -> None:
+        with self.session() as s:
+            # We could create a separate NamespaceAnalysisRecord table,
+            # but for now reuse AnalysisRecord with rollout_id = None
+            # and store incident_id in metadata
+            record = AnalysisRecord(
+                rollout_id=incident_id,  # Reuse this field temporarily
+                model_name=model_name,
+                prompt_version=prompt_version,
+                reduced_context=reduced_context,
+                analysis=analysis.model_dump(mode="json"),
+            )
+            s.add(record)
+            s.flush()
+            status_stmt = (
+                update(NamespaceIncidentRecord)
+                .where(NamespaceIncidentRecord.id == incident_id)
+                .values(
+                    analysis_id=record.id,
+                    analysis_status=AnalysisStatus.DONE,
+                )
+            )
+            s.execute(status_stmt)
+            s.commit()
+
+    def count_investigations_in_window(
+        self, 
+        cluster: str,
+        namespace: Optional[str] = None,
+        hours: int = 1
+    ) -> int:
+        """Count investigations (rollouts + incidents) in time window for rate limiting."""
+        from datetime import timedelta
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        
+        with self.session() as s:
+            # Count rollout investigations
+            rollout_stmt = select(Rollout).where(
+                Rollout.cluster == cluster,
+                Rollout.started_at >= cutoff
+            )
+            if namespace:
+                rollout_stmt = rollout_stmt.where(Rollout.namespace == namespace)
+            rollout_count = len(list(s.scalars(rollout_stmt)))
+            
+            # Count namespace incident investigations
+            incident_stmt = select(NamespaceIncidentRecord).where(
+                NamespaceIncidentRecord.cluster == cluster,
+                NamespaceIncidentRecord.started_at >= cutoff
+            )
+            if namespace:
+                incident_stmt = incident_stmt.where(NamespaceIncidentRecord.namespace == namespace)
+            incident_count = len(list(s.scalars(incident_stmt)))
+            
+            return rollout_count + incident_count
+
 
 

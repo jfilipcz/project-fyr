@@ -1,12 +1,13 @@
 # Project Fyr
 
-Project Fyr is an agentic AI assistant that watches Kubernetes deployments, inspects failures, enriches them using namespace annotations, and posts concise guidance to Slack. It contains:
+Project Fyr is an agentic AI assistant that watches Kubernetes deployments and namespaces, inspects failures, enriches them using namespace annotations, and posts concise guidance to Slack. It contains:
 
-- **Watcher** – streams deployment events and tracks rollout status.
-- **Analyzer** – an autonomous LangChain agent that investigates failures by actively querying the cluster (Pods, Events, Logs, ArgoCD, Helm, Prometheus).
+- **Watcher** – streams deployment events, tracks rollout status, and monitors namespace-level incidents (stuck terminating, quota violations, high eviction/restart rates).
+- **Analyzer** – an autonomous LangChain agent that investigates failures by actively querying the cluster (Pods, Events, Logs, ArgoCD, Helm, Prometheus, Namespace details, Resource Quotas).
 - **Dashboard** – a FastAPI web UI for browsing rollouts, viewing analyses, and triggering on-demand investigations.
 - **Slack Notifier** – posts the agent's analysis (summary, root cause, remediation) to Slack.
 - **Namespace annotations** – opt-in metadata (Slack channel, owning team, etc.) stored on the Kubernetes namespace.
+- **Namespace investigations** – automatic detection and analysis of namespace-level issues including stuck terminating states, quota violations, pod eviction storms, and high restart rates.
 - **Triage helper** – heuristics to suggest the responsible team (infra, security, application).
 - **Helm chart** – deploys all three services (watcher, analyzer, dashboard) with configurable settings.
 
@@ -115,6 +116,20 @@ All services read settings via the `PROJECT_FYR_*` environment variables:
 | `PROJECT_FYR_AZURE_DEPLOYMENT` | Azure OpenAI deployment name | empty |
 | `PROJECT_FYR_LANGCHAIN_MODEL_NAME` | LLM to use for the agent | `gpt-4o-mini` |
 | `PROJECT_FYR_PROMETHEUS_URL` | Prometheus server URL for metrics queries | empty |
+| `PROJECT_FYR_WATCH_ALL_NAMESPACES` | Monitor all deployments without labels/annotations | `false` |
+| `PROJECT_FYR_NAMESPACE_LABEL_ENABLED` | Allow namespace-level opt-in annotation | `true` |
+| `PROJECT_FYR_NAMESPACE_MONITORING_ENABLED` | Enable namespace-level incident detection | `true` |
+| `PROJECT_FYR_NAMESPACE_MONITORING_INTERVAL_SECONDS` | Check interval for namespace issues | `300` |
+| `PROJECT_FYR_NAMESPACE_TERMINATING_THRESHOLD_MINUTES` | Minutes before namespace considered stuck | `5` |
+| `PROJECT_FYR_NAMESPACE_EVICTION_THRESHOLD` | Pod evictions to trigger investigation | `5` |
+| `PROJECT_FYR_NAMESPACE_EVICTION_WINDOW_MINUTES` | Time window for eviction counting | `5` |
+| `PROJECT_FYR_NAMESPACE_RESTART_THRESHOLD` | Container restarts to trigger investigation | `10` |
+| `PROJECT_FYR_NAMESPACE_RESTART_WINDOW_MINUTES` | Time window for restart counting | `5` |
+| `PROJECT_FYR_MAX_INVESTIGATIONS_PER_NAMESPACE_PER_HOUR` | Rate limit per namespace | `2` |
+| `PROJECT_FYR_MAX_INVESTIGATIONS_PER_CLUSTER_PER_HOUR` | Rate limit cluster-wide | `20` |
+| `PROJECT_FYR_ALERT_WEBHOOK_SECRET` | Secret for alert webhook authentication | empty |
+| `PROJECT_FYR_ALERT_CORRELATION_WINDOW_SECONDS` | Time window for alert batching | `300` |
+| `PROJECT_FYR_ALERT_BATCH_MIN_COUNT` | Minimum alerts to trigger batch investigation | `1` |
 
 
 When deploying with External Secret Operator, set `secrets.existingSecret` (Helm value) so the watcher pod pulls credentials/keys from that Secret via `envFrom`.
@@ -137,11 +152,13 @@ kubectl annotate namespace payments \
   project-fyr/team="Payments SRE" --overwrite
 ```
 
-### Deployment opt-in
+### Deployment Monitoring Options
 
-**Important:** Project Fyr only monitors deployments that have the label `project-fyr/enabled=true`. This is an opt-in mechanism to avoid monitoring all deployments in your cluster.
+Project Fyr offers flexible monitoring options through labels and annotations:
 
-Add the label to deployments you want to monitor:
+#### Option 1: Deployment-level opt-in (default)
+
+Add the label `project-fyr/enabled=true` to individual deployments you want to monitor:
 
 ```bash
 # Label an existing deployment
@@ -159,7 +176,121 @@ spec:
   # ... rest of deployment spec
 ```
 
-Without this label, the watcher will ignore the deployment even if the namespace has proper annotations.
+#### Option 2: Namespace-level opt-in
+
+Enable monitoring for **all deployments** in a namespace by adding an annotation to the namespace:
+
+```bash
+# Enable Fyr for all deployments in the namespace
+kubectl annotate namespace my-namespace project-fyr/enabled=true
+```
+
+This is useful for namespaces where you want to monitor everything without labeling each deployment individually.
+
+**Note:** You can disable namespace-level checking by setting the environment variable `PROJECT_FYR_NAMESPACE_LABEL_ENABLED=false` in the watcher deployment.
+
+#### Option 3: Watch all namespaces (global monitoring)
+
+To monitor **all deployments across all namespaces** without any labels or annotations, set this environment variable in the watcher deployment:
+
+```yaml
+env:
+  - name: PROJECT_FYR_WATCH_ALL_NAMESPACES
+    value: "true"
+```
+
+**⚠️ Warning:** This option monitors every deployment in your cluster. Use with caution in large clusters as it may generate significant data and analysis load.
+
+### Monitoring Behavior Summary
+
+| Configuration | Behavior |
+|---------------|----------|
+| Default (no env vars) | Only deployments with `project-fyr/enabled=true` label **OR** in namespaces with `project-fyr/enabled=true` annotation |
+| `NAMESPACE_LABEL_ENABLED=false` | Only deployments with `project-fyr/enabled=true` label (namespace annotations ignored) |
+| `WATCH_ALL_NAMESPACES=true` | All deployments in all namespaces (ignores all labels and annotations) |
+
+## Namespace-Level Monitoring
+
+In addition to deployment rollout monitoring, Project Fyr can automatically detect and investigate namespace-level issues:
+
+### Supported Incident Types
+
+1. **Stuck Terminating Namespaces**
+   - Detects namespaces stuck in `Terminating` state beyond a threshold
+   - Investigates finalizers and resources preventing deletion
+   - Default threshold: 5 minutes
+
+2. **Resource Quota Violations**
+   - Monitors namespaces hitting quota limits
+   - Identifies which resources are constrained
+   - Recommends quota adjustments or resource cleanup
+
+3. **Pod Eviction Storms**
+   - Detects high rates of pod evictions
+   - Investigates memory/disk pressure or resource constraints
+   - Default: 5+ evictions in 5 minutes
+
+4. **High Container Restart Rates**
+   - Monitors excessive container restarts across namespace
+   - Identifies failing pods and restart patterns
+   - Default: 10+ restarts in 5 minutes
+
+### Enabling Namespace Monitoring
+
+Namespace monitoring is **enabled by default** for namespaces with the `project-fyr/enabled=true` annotation:
+
+```bash
+# Enable namespace-level monitoring
+kubectl annotate namespace my-namespace project-fyr/enabled=true
+```
+
+The same annotation enables both deployment rollout monitoring and namespace incident detection.
+
+### Rate Limiting
+
+To prevent investigation storms, namespace investigations are rate-limited:
+- **Per-namespace limit**: 2 investigations per hour (default)
+- **Cluster-wide limit**: 20 investigations per hour (default)
+
+These limits apply to the total of rollout investigations + namespace incident investigations.
+
+### Configuration
+
+Tune namespace monitoring behavior via environment variables:
+
+```yaml
+env:
+  # Enable/disable namespace monitoring
+  - name: PROJECT_FYR_NAMESPACE_MONITORING_ENABLED
+    value: "true"
+  
+  # Check interval (seconds)
+  - name: PROJECT_FYR_NAMESPACE_MONITORING_INTERVAL_SECONDS
+    value: "300"
+  
+  # Stuck terminating threshold (minutes)
+  - name: PROJECT_FYR_NAMESPACE_TERMINATING_THRESHOLD_MINUTES
+    value: "5"
+  
+  # Eviction detection
+  - name: PROJECT_FYR_NAMESPACE_EVICTION_THRESHOLD
+    value: "5"
+  - name: PROJECT_FYR_NAMESPACE_EVICTION_WINDOW_MINUTES
+    value: "5"
+  
+  # Restart detection
+  - name: PROJECT_FYR_NAMESPACE_RESTART_THRESHOLD
+    value: "10"
+  - name: PROJECT_FYR_NAMESPACE_RESTART_WINDOW_MINUTES
+    value: "5"
+  
+  # Rate limiting
+  - name: PROJECT_FYR_MAX_INVESTIGATIONS_PER_NAMESPACE_PER_HOUR
+    value: "2"
+  - name: PROJECT_FYR_MAX_INVESTIGATIONS_PER_CLUSTER_PER_HOUR
+    value: "20"
+```
+
 
 ## Dashboard Web UI
 
