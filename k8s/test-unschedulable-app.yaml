@@ -10,7 +10,7 @@ kind: Deployment
 metadata:
   name: test-unschedulable-app
   namespace: fyr-testing
-  annotations:
+  labels:
     project-fyr/enabled: "true"
 spec:
   replicas: 1

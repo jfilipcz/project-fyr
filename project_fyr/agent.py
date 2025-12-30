@@ -26,6 +26,10 @@ from .tools import (
     k8s_list_helm_releases,
     k8s_logs,
     k8s_query_prometheus,
+    get_namespace_details,
+    get_namespace_resource_quotas,
+    get_namespace_pods_summary,
+    get_namespace_events,
 )
 
 logger = logging.getLogger(__name__)

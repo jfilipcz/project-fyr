@@ -10,6 +10,12 @@ data:
   PROJECT_FYR_DATABASE_URL: {{ tpl .Values.config.databaseUrl . | quote }}
   PROJECT_FYR_K8S_CLUSTER_NAME: {{ .Values.config.clusterName | quote }}
   PROJECT_FYR_ROLLOUT_TIMEOUT_SECONDS: {{ .Values.config.rolloutTimeoutSeconds | quote }}
+  {{- if hasKey .Values.config "watchAllNamespaces" }}
+  PROJECT_FYR_WATCH_ALL_NAMESPACES: {{ .Values.config.watchAllNamespaces | quote }}
+  {{- end }}
+  {{- if hasKey .Values.config "namespaceLabelEnabled" }}
+  PROJECT_FYR_NAMESPACE_LABEL_ENABLED: {{ .Values.config.namespaceLabelEnabled | quote }}
+  {{- end }}
   PROJECT_FYR_SLACK_BOT_TOKEN: {{ .Values.config.slackBotToken | quote }}
   PROJECT_FYR_SLACK_DEFAULT_CHANNEL: {{ .Values.config.slackDefaultChannel | quote }}
   {{- if .Values.config.slackApiUrl }}

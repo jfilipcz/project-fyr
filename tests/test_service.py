@@ -72,3 +72,118 @@ def test_should_fail_early():
 
     signals = PodFailureSignals(total_pods=5, crashloop_pods=1)
     assert should_fail_early(signals) is False
+
+
+def test_handle_deployment_event_with_watch_all_namespaces():
+    """Test that watch_all_namespaces=True monitors all deployments."""
+    from project_fyr.service import handle_deployment_event
+    from project_fyr.config import Settings
+    
+    dep = MagicMock()
+    dep.metadata.namespace = "test-ns"
+    dep.metadata.name = "test-app"
+    dep.metadata.generation = 1
+    dep.metadata.labels = {}  # No labels
+    dep.metadata.annotations = {}
+    dep.status.conditions = []
+    dep.status.available_replicas = 0
+    dep.status.availableReplicas = 0
+    dep.spec.replicas = 1
+    
+    repo = MagicMock()
+    repo.get_by_key.return_value = None
+    
+    config = Settings(watch_all_namespaces=True)
+    
+    # Should create rollout even without labels
+    handle_deployment_event(dep, "ADDED", repo, "test-cluster", namespace_metadata={}, config=config)
+    
+    repo.create.assert_called_once()
+
+
+def test_handle_deployment_event_with_namespace_annotation():
+    """Test that namespace-level project-fyr/enabled annotation works."""
+    from project_fyr.service import handle_deployment_event
+    from project_fyr.config import Settings
+    
+    dep = MagicMock()
+    dep.metadata.namespace = "test-ns"
+    dep.metadata.name = "test-app"
+    dep.metadata.generation = 1
+    dep.metadata.labels = {}  # No deployment label
+    dep.metadata.annotations = {}
+    dep.status.conditions = []
+    dep.status.available_replicas = 0
+    dep.status.availableReplicas = 0
+    dep.spec.replicas = 1
+    
+    repo = MagicMock()
+    repo.get_by_key.return_value = None
+    
+    # Namespace has the annotation
+    ns_meta = {
+        "metadata_json": {
+            "project-fyr/enabled": "true"
+        }
+    }
+    
+    config = Settings(namespace_label_enabled=True, watch_all_namespaces=False)
+    
+    # Should create rollout because namespace has annotation
+    handle_deployment_event(dep, "ADDED", repo, "test-cluster", namespace_metadata=ns_meta, config=config)
+    
+    repo.create.assert_called_once()
+
+
+def test_handle_deployment_event_requires_opt_in():
+    """Test that deployments without labels/annotations are ignored in default mode."""
+    from project_fyr.service import handle_deployment_event
+    from project_fyr.config import Settings
+    
+    dep = MagicMock()
+    dep.metadata.namespace = "test-ns"
+    dep.metadata.name = "test-app"
+    dep.metadata.generation = 1
+    dep.metadata.labels = {}  # No labels
+    dep.metadata.annotations = {}
+    
+    repo = MagicMock()
+    
+    # No namespace annotation either
+    ns_meta = {"metadata_json": {}}
+    
+    config = Settings(namespace_label_enabled=True, watch_all_namespaces=False)
+    
+    # Should NOT create rollout
+    handle_deployment_event(dep, "ADDED", repo, "test-cluster", namespace_metadata=ns_meta, config=config)
+    
+    repo.create.assert_not_called()
+    repo.get_by_key.assert_not_called()
+
+
+def test_handle_deployment_event_with_deployment_label():
+    """Test that deployment label still works."""
+    from project_fyr.service import handle_deployment_event
+    from project_fyr.config import Settings
+    
+    dep = MagicMock()
+    dep.metadata.namespace = "test-ns"
+    dep.metadata.name = "test-app"
+    dep.metadata.generation = 1
+    dep.metadata.labels = {"project-fyr/enabled": "true"}  # Deployment has label
+    dep.metadata.annotations = {}
+    dep.status.conditions = []
+    dep.status.available_replicas = 0
+    dep.status.availableReplicas = 0
+    dep.spec.replicas = 1
+    
+    repo = MagicMock()
+    repo.get_by_key.return_value = None
+    
+    config = Settings(namespace_label_enabled=False, watch_all_namespaces=False)
+    
+    # Should create rollout because deployment has label
+    handle_deployment_event(dep, "ADDED", repo, "test-cluster", namespace_metadata={}, config=config)
+    
+    repo.create.assert_called_once()
+

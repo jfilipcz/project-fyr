@@ -14,6 +14,8 @@ kind: Deployment
 metadata:
   name: missing-configmap-app
   namespace: fyr-testing
+  labels:
+    project-fyr/enabled: "true"
 spec:
   replicas: 2
   selector:
@@ -41,6 +43,8 @@ kind: Deployment
 metadata:
   name: image-pull-error-app
   namespace: fyr-testing
+  labels:
+    project-fyr/enabled: "true"
 spec:
   replicas: 2
   selector:
@@ -63,6 +67,8 @@ kind: Deployment
 metadata:
   name: port-mismatch-app
   namespace: fyr-testing
+  labels:
+    project-fyr/enabled: "true"
 spec:
   replicas: 2
   selector:
@@ -98,6 +104,8 @@ kind: Deployment
 metadata:
   name: oom-killed-app
   namespace: fyr-testing
+  labels:
+    project-fyr/enabled: "true"
 spec:
   replicas: 1
   selector:
@@ -126,6 +134,8 @@ kind: Deployment
 metadata:
   name: crash-loop-app
   namespace: fyr-testing
+  labels:
+    project-fyr/enabled: "true"
 spec:
   replicas: 2
   selector:
@@ -149,6 +159,8 @@ kind: Deployment
 metadata:
   name: successful-app
   namespace: fyr-testing
+  labels:
+    project-fyr/enabled: "true"
 spec:
   replicas: 2
   selector:

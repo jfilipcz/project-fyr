@@ -78,15 +78,136 @@
         a:hover {
             text-decoration: underline;
         }
+
+        .filter-buttons {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .filter-btn {
+            padding: 8px 16px;
+            border-radius: 4px;
+            border: 2px solid #dee2e6;
+            background: white;
+            color: #495057;
+            cursor: pointer;
+            font-weight: 500;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover {
+            background: #f8f9fa;
+            text-decoration: none;
+            border-color: #adb5bd;
+        }
+
+        .filter-btn.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+
+        .new-investigation-btn {
+            background: #28a745;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 4px;
+            text-decoration: none;
+            font-weight: 600;
+            border: 2px solid #28a745;
+        }
+
+        .new-investigation-btn:hover {
+            background: #218838;
+            border-color: #218838;
+            text-decoration: none;
+        }
+
+        .search-box {
+            padding: 8px 12px;
+            border: 2px solid #dee2e6;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 250px;
+            transition: border-color 0.2s;
+        }
+
+        .search-box:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+
+        .search-form {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .search-btn {
+            padding: 8px 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .search-btn:hover {
+            background: #0056b3;
+        }
+
+        .clear-btn {
+            padding: 8px 12px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .clear-btn:hover {
+            background: #5a6268;
+            text-decoration: none;
+        }
     </style>
 </head>
 
 <body>
     <h1>Project Fyr Rollouts</h1>
-    <div style="margin-bottom: 20px;">
-        <a href="/investigate"
-            style="background: #007bff; color: white; padding: 10px 15px; border-radius: 4px; text-decoration: none; font-weight: 600;">+
-            New Investigation</a>
+    <div class="filter-buttons">
+        <a href="/" class="filter-btn {% if not current_status %}active{% endif %}">All</a>
+        <a href="/?status=failed{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}" class="filter-btn {% if current_status == 'failed' %}active{% endif %}">Failed</a>
+        <a href="/?status=success{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}" class="filter-btn {% if current_status == 'success' %}active{% endif %}">Success</a>
+        <a href="/?status=rolling_out{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}" class="filter-btn {% if current_status == 'rolling_out' %}active{% endif %}">Rolling Out</a>
+        <a href="/?status=pending{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}" class="filter-btn {% if current_status == 'pending' %}active{% endif %}">Pending</a>
+        <span style="flex-grow: 1;"></span>
+        <form method="get" class="search-form">
+            <input type="text" name="namespace" placeholder="Search by namespace..." 
+                   value="{{ current_namespace or '' }}" class="search-box">
+            {% if current_status %}
+            <input type="hidden" name="status" value="{{ current_status }}">
+            {% endif %}
+            <button type="submit" class="search-btn">Search</button>
+            {% if current_namespace %}
+            <a href="/?{% if current_status %}status={{ current_status }}{% endif %}" class="clear-btn">Clear</a>
+            {% endif %}
+        </form>
+        <span style="color: #6c757d; margin: 0 15px;">
+            Showing {{ rollouts|length }} rollout{% if rollouts|length != 1 %}s{% endif %}
+            {% if current_status %} ({{ current_status|upper }}){% endif %}
+            {% if current_namespace %} in <strong>{{ current_namespace }}</strong>{% endif %}
+        </span>
+        <a href="/investigate" class="new-investigation-btn">+ New Investigation</a>
     </div>
     <table>
         <thead>
