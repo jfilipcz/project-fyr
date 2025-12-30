@@ -721,3 +721,205 @@ def k8s_query_prometheus(
     except Exception as e:
         logger.error(f"Unexpected error querying Prometheus: {e}", exc_info=True)
         return f"Error querying Prometheus: {str(e)}"
+
+
+# Namespace-specific investigation tools
+
+@tool
+def get_namespace_details(namespace: str) -> str:
+    """
+    Get detailed information about a namespace including status, labels, annotations, and finalizers.
+    Use this to investigate namespace-level issues like stuck terminating state.
+    
+    Args:
+        namespace: The name of the namespace to investigate.
+    """
+    core_v1 = _get_core_v1()
+    
+    try:
+        ns = core_v1.read_namespace(namespace)
+        
+        details = [
+            f"Namespace: {ns.metadata.name}",
+            f"Status: {ns.status.phase if ns.status else 'Unknown'}",
+            f"Created: {ns.metadata.creation_timestamp}",
+        ]
+        
+        if ns.metadata.deletion_timestamp:
+            details.append(f"Deletion Timestamp: {ns.metadata.deletion_timestamp}")
+        
+        if ns.metadata.finalizers:
+            details.append(f"Finalizers: {', '.join(ns.metadata.finalizers)}")
+        
+        if ns.metadata.labels:
+            details.append("Labels:")
+            for k, v in ns.metadata.labels.items():
+                details.append(f"  {k}: {v}")
+        
+        if ns.metadata.annotations:
+            details.append("Annotations:")
+            for k, v in ns.metadata.annotations.items():
+                if k != "kubectl.kubernetes.io/last-applied-configuration":
+                    details.append(f"  {k}: {v}")
+        
+        return "\n".join(details)
+        
+    except ApiException as e:
+        return f"Error getting namespace details: {e.reason}"
+    except Exception as e:
+        logger.error(f"Error in get_namespace_details: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_namespace_resource_quotas(namespace: str) -> str:
+    """
+    Get resource quotas and current usage for a namespace.
+    Use this to investigate quota-related issues.
+    
+    Args:
+        namespace: The name of the namespace.
+    """
+    core_v1 = _get_core_v1()
+    
+    try:
+        quotas = core_v1.list_namespaced_resource_quota(namespace).items
+        
+        if not quotas:
+            return f"No resource quotas defined for namespace {namespace}"
+        
+        details = [f"Resource Quotas for {namespace}:"]
+        
+        for quota in quotas:
+            details.append(f"\n{quota.metadata.name}:")
+            
+            if quota.status.hard:
+                details.append("  Hard Limits:")
+                for resource, limit in quota.status.hard.items():
+                    used = quota.status.used.get(resource, "0") if quota.status.used else "0"
+                    details.append(f"    {resource}: {used} / {limit}")
+        
+        return "\n".join(details)
+        
+    except ApiException as e:
+        return f"Error getting resource quotas: {e.reason}"
+    except Exception as e:
+        logger.error(f"Error in get_namespace_resource_quotas: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_namespace_pods_summary(namespace: str) -> str:
+    """
+    Get a summary of all pods in a namespace including their status, restarts, and age.
+    Use this to investigate namespace-wide pod issues.
+    
+    Args:
+        namespace: The name of the namespace.
+    """
+    core_v1 = _get_core_v1()
+    
+    try:
+        pods = core_v1.list_namespaced_pod(namespace).items
+        
+        if not pods:
+            return f"No pods found in namespace {namespace}"
+        
+        # Group by status
+        by_status = {}
+        total_restarts = 0
+        failing_pods = []
+        
+        for pod in pods:
+            phase = pod.status.phase
+            by_status[phase] = by_status.get(phase, 0) + 1
+            
+            restarts = sum(c.restart_count for c in (pod.status.container_statuses or []))
+            total_restarts += restarts
+            
+            if phase in ["Failed", "Unknown"] or restarts > 5:
+                failing_pods.append({
+                    "name": pod.metadata.name,
+                    "phase": phase,
+                    "restarts": restarts,
+                    "reason": pod.status.reason or "N/A"
+                })
+        
+        summary = [
+            f"Pod Summary for {namespace}:",
+            f"Total Pods: {len(pods)}",
+            "By Status:",
+        ]
+        
+        for status, count in sorted(by_status.items()):
+            summary.append(f"  {status}: {count}")
+        
+        summary.append(f"Total Container Restarts: {total_restarts}")
+        
+        if failing_pods:
+            summary.append("\nPods with Issues:")
+            for pod in failing_pods[:10]:  # Limit to 10
+                summary.append(f"  • {pod['name']}: {pod['phase']} (Restarts: {pod['restarts']}, Reason: {pod['reason']})")
+        
+        return "\n".join(summary)
+        
+    except ApiException as e:
+        return f"Error getting pods summary: {e.reason}"
+    except Exception as e:
+        logger.error(f"Error in get_namespace_pods_summary: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_namespace_events(namespace: str, last_minutes: int = 60) -> str:
+    """
+    Get recent events in a namespace to understand what's happening.
+    Use this to investigate the sequence of events leading to issues.
+    
+    Args:
+        namespace: The name of the namespace.
+        last_minutes: Only show events from the last N minutes (default 60).
+    """
+    core_v1 = _get_core_v1()
+    
+    try:
+        events = core_v1.list_namespaced_event(namespace).items
+        
+        if not events:
+            return f"No events found in namespace {namespace}"
+        
+        # Filter by time
+        cutoff = datetime.utcnow() - timedelta(minutes=last_minutes)
+        recent_events = []
+        
+        for event in events:
+            if event.last_timestamp:
+                # Handle timezone-aware datetime
+                event_time = event.last_timestamp
+                if event_time.tzinfo:
+                    event_time = event_time.replace(tzinfo=None)
+                
+                if event_time >= cutoff:
+                    recent_events.append(event)
+        
+        if not recent_events:
+            return f"No events in the last {last_minutes} minutes for namespace {namespace}"
+        
+        # Sort by time
+        recent_events.sort(key=lambda e: e.last_timestamp or datetime.min, reverse=True)
+        
+        summary = [f"Recent Events (last {last_minutes}min) for {namespace}:"]
+        
+        for event in recent_events[:20]:  # Limit to 20
+            time_str = event.last_timestamp.strftime("%H:%M:%S") if event.last_timestamp else "Unknown"
+            obj_ref = f"{event.involved_object.kind}/{event.involved_object.name}" if event.involved_object else "Unknown"
+            summary.append(f"  [{time_str}] {event.type} - {event.reason}: {event.message} ({obj_ref})")
+        
+        return "\n".join(summary)
+        
+    except ApiException as e:
+        return f"Error getting namespace events: {e.reason}"
+    except Exception as e:
+        logger.error(f"Error in get_namespace_events: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+

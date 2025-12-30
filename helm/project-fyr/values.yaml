@@ -97,6 +97,15 @@ config:
   clusterName: my-cluster
   # Timeout in seconds before marking a rollout as failed
   rolloutTimeoutSeconds: 900
+  
+  # Watch behavior configuration
+  # If true, monitor ALL deployments regardless of labels/annotations
+  # WARNING: Use with caution in large clusters
+  watchAllNamespaces: false
+  # If true, allow namespace-level project-fyr/enabled annotation to enable monitoring
+  # for all deployments in that namespace (ignored if watchAllNamespaces=true)
+  namespaceLabelEnabled: true
+  
   # Slack bot token (xoxb-...) - recommend using existingSecret instead
   slackBotToken: ""
   # Default Slack channel for notifications (e.g., #deployments)

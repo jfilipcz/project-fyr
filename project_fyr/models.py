@@ -95,6 +95,7 @@ class AlertBatch(BaseModel):
 class JobType(str, Enum):
     ROLLOUT = "rollout"
     ALERT = "alert"
+    NAMESPACE = "namespace"
 
 
 class JobStatus(str, Enum):
@@ -104,9 +105,47 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 
+class NamespaceIncidentType(str, Enum):
+    TERMINATING_STUCK = "terminating_stuck"
+    QUOTA_EXCEEDED = "quota_exceeded"
+    HIGH_EVICTION_RATE = "high_eviction_rate"
+    HIGH_RESTART_RATE = "high_restart_rate"
+
+
+class NamespaceIncidentStatus(str, Enum):
+    ACTIVE = "active"
+    INVESTIGATING = "investigating"
+    RESOLVED = "resolved"
+
+
 class AlertState(BaseModel):
     fingerprint: str
     status: str
     last_received_at: datetime
     last_investigated_at: Optional[datetime] = None
     created_at: datetime
+
+
+class NamespaceIncident(BaseModel):
+    id: int
+    cluster: str
+    namespace: str
+    incident_type: NamespaceIncidentType
+    status: NamespaceIncidentStatus
+    started_at: datetime
+    resolved_at: Optional[datetime] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    analysis_id: Optional[int] = None
+
+
+class NamespaceContext(BaseModel):
+    """Context data for namespace investigation."""
+    namespace: str
+    cluster: str
+    incident_type: str
+    namespace_status: dict[str, Any]
+    pod_summary: dict[str, Any]
+    events: list[EventSummary]
+    quotas: Optional[dict[str, Any]] = None
+    recent_evictions: list[dict[str, Any]] = Field(default_factory=list)
+    recent_restarts: list[dict[str, Any]] = Field(default_factory=list)

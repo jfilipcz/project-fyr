@@ -25,9 +25,23 @@ def get_alert_repo() -> Iterator[AlertRepo]:
     yield AlertRepo(engine)
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request, repo: RolloutRepo = Depends(get_repo)):
-    rollouts = repo.list_recent(limit=50)
-    return templates.TemplateResponse("index.html", {"request": request, "rollouts": rollouts})
+async def index(request: Request, status: str = None, namespace: str = None, repo: RolloutRepo = Depends(get_repo)):
+    # Filter by status and/or namespace if provided
+    if status and namespace:
+        rollouts = repo.list_by_status_and_namespace(status, namespace, limit=50)
+    elif status:
+        rollouts = repo.list_by_status(status, limit=50)
+    elif namespace:
+        rollouts = repo.list_by_namespace(namespace, limit=50)
+    else:
+        rollouts = repo.list_recent(limit=50)
+    
+    return templates.TemplateResponse("index.html", {
+        "request": request, 
+        "rollouts": rollouts,
+        "current_status": status,
+        "current_namespace": namespace
+    })
 
 @app.get("/rollout/{rollout_id}", response_class=HTMLResponse)
 async def detail(request: Request, rollout_id: int, repo: RolloutRepo = Depends(get_repo)):
