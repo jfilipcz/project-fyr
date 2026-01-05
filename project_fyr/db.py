@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime
-from typing import Iterator, Optional
+from datetime import datetime, timedelta
+from typing import Iterator, Optional, Any
 
-from sqlalchemy import JSON, DateTime, Enum as SAEnum, Integer, String, create_engine, select, update
+from sqlalchemy import JSON, DateTime, Enum as SAEnum, Integer, String, create_engine, select, update, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from .models import Analysis, AnalysisStatus, NotifyStatus, ReducedContext, RolloutStatus, NamespaceIncidentType, NamespaceIncidentStatus
@@ -214,6 +214,60 @@ class RolloutRepo:
         ).order_by(Rollout.id.desc()).limit(limit)
         with self.session() as s:
             return list(s.scalars(stmt))
+
+    def get_stats(self, hours: int = 24) -> dict[str, int]:
+        """Get rollout statistics for the last N hours."""
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        
+        # Total rollouts in window
+        stmt_total = select(Rollout).where(Rollout.started_at >= cutoff)
+        
+        # Success count
+        stmt_success = select(Rollout).where(
+            Rollout.started_at >= cutoff,
+            Rollout.status == RolloutStatus.SUCCESS
+        )
+        
+        # Failed count
+        stmt_failed = select(Rollout).where(
+            Rollout.started_at >= cutoff,
+            Rollout.status == RolloutStatus.FAILED
+        )
+
+        with self.session() as s:
+            total = len(list(s.scalars(stmt_total)))
+            success = len(list(s.scalars(stmt_success)))
+            failed = len(list(s.scalars(stmt_failed)))
+            
+        return {
+            "total": total,
+            "success": success,
+            "failed": failed,
+            "success_rate": round((success / total) * 100, 1) if total > 0 else 0
+        }
+
+    def get_recent_failures(self, limit: int = 50, hours: int = 24) -> list[tuple[Rollout, Optional[AnalysisRecord]]]:
+        """Get failed rollouts with their analysis records for the last N hours."""
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        
+        # Join Rollout with AnalysisRecord
+        stmt = (
+            select(Rollout, AnalysisRecord)
+            .outerjoin(AnalysisRecord, Rollout.analysis_id == AnalysisRecord.id)
+            .where(
+                Rollout.status == RolloutStatus.FAILED,
+                Rollout.started_at >= cutoff,
+                Rollout.analysis_status == AnalysisStatus.DONE
+            )
+            .order_by(Rollout.id.desc())
+            .limit(limit)
+        )
+        
+        with self.session() as s:
+            # Result is a list of Row objects (tuples)
+            results = s.execute(stmt).all()
+            # Convert to list of tuples for easier consumption
+            return [(r.Rollout, r.AnalysisRecord) for r in results]
 
     def list_by_status_and_namespace(self, status: str, namespace: str, limit: int = 50) -> list[Rollout]:
         """List rollouts filtered by both status and namespace."""

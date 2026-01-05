@@ -174,3 +174,39 @@ async def alert_detail(request: Request, batch_id: int, repo: AlertRepo = Depend
         "job": job
     })
 
+
+@app.get("/overview", response_class=HTMLResponse)
+async def overview(request: Request, hours: int = 24, repo: RolloutRepo = Depends(get_repo)):
+    stats = repo.get_stats(hours=hours)
+    
+    return templates.TemplateResponse("overview.html", {
+        "request": request,
+        "stats": stats,
+        "hours": hours
+    })
+
+
+@app.get("/api/overview/insights")
+async def get_overview_insights(hours: int = 24, repo: RolloutRepo = Depends(get_repo)):
+    """Get AI-aggregated insights for recent failures."""
+    from .aggregator import IssueAggregator
+    
+    # Get recent failures with analysis
+    failures = repo.get_recent_failures(limit=50, hours=hours)
+    
+    if not failures:
+        return {
+            "top_issues": [],
+            "summary": "No failures detected in the selected time window (or no analysis available)."
+        }
+
+    aggregator = IssueAggregator(
+        model_name=settings.langchain_model_name,
+        api_key=settings.openai_api_key,
+        api_base=settings.openai_api_base,
+        api_version=settings.openai_api_version,
+        azure_deployment=settings.azure_deployment
+    )
+    
+    return aggregator.aggregate_issues(failures)
+
