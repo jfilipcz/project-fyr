@@ -185,15 +185,22 @@
 <body>
     <h1>Project Fyr Rollouts</h1>
     <div class="filter-buttons">
+        <a href="/overview" class="filter-btn"
+            style="background-color: #6366f1; color: white; border-color: #6366f1;">Overview Dashboard</a>
+        <span style="border-right: 1px solid #ccc; margin: 0 10px; height: 30px;"></span>
         <a href="/" class="filter-btn {% if not current_status %}active{% endif %}">All</a>
-        <a href="/?status=failed{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}" class="filter-btn {% if current_status == 'failed' %}active{% endif %}">Failed</a>
-        <a href="/?status=success{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}" class="filter-btn {% if current_status == 'success' %}active{% endif %}">Success</a>
-        <a href="/?status=rolling_out{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}" class="filter-btn {% if current_status == 'rolling_out' %}active{% endif %}">Rolling Out</a>
-        <a href="/?status=pending{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}" class="filter-btn {% if current_status == 'pending' %}active{% endif %}">Pending</a>
+        <a href="/?status=failed{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
+            class="filter-btn {% if current_status == 'failed' %}active{% endif %}">Failed</a>
+        <a href="/?status=success{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
+            class="filter-btn {% if current_status == 'success' %}active{% endif %}">Success</a>
+        <a href="/?status=rolling_out{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
+            class="filter-btn {% if current_status == 'rolling_out' %}active{% endif %}">Rolling Out</a>
+        <a href="/?status=pending{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
+            class="filter-btn {% if current_status == 'pending' %}active{% endif %}">Pending</a>
         <span style="flex-grow: 1;"></span>
         <form method="get" class="search-form">
-            <input type="text" name="namespace" placeholder="Search by namespace..." 
-                   value="{{ current_namespace or '' }}" class="search-box">
+            <input type="text" name="namespace" placeholder="Search by namespace..."
+                value="{{ current_namespace or '' }}" class="search-box">
             {% if current_status %}
             <input type="hidden" name="status" value="{{ current_status }}">
             {% endif %}
