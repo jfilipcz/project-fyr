@@ -758,11 +758,19 @@ def handle_deployment_event(
         return
 
     cfg = config or settings
+    
+    # Skip system namespaces
+    if dep.metadata.namespace in cfg.system_namespaces:
+        logger.debug(f"Skipping system namespace: {dep.metadata.namespace}")
+        return
+    
     labels = dep.metadata.labels or {}
     annotations = dep.metadata.annotations or {}
     ns_meta = namespace_metadata or {}
     
-    # Check if this deployment should be watched
+    # When watch_all_namespaces=False, check if this deployment should be watched
+    # The watch selector filters by deployment label, but we also support namespace-level
+    # annotations. So we need this additional check for namespace-level opt-in.
     if not cfg.watch_all_namespaces:
         # Deployment has the label
         deployment_enabled = labels.get("project-fyr/enabled") == "true"
@@ -870,10 +878,21 @@ class AnalysisWorker:
 
     def loop(self):
         while True:
-            rollouts = self._repo.list_failed(self._cluster)
+            # Investigate failed rollouts
+            failed_rollouts = self._repo.list_failed(self._cluster)
+            
+            # Investigate stuck pending rollouts (pending for > threshold)
+            stuck_pending = self._repo.list_stuck_pending(
+                self._cluster, 
+                self._config.pending_investigation_threshold_seconds
+            )
+            
+            rollouts = failed_rollouts + stuck_pending
+            
             for rollout in rollouts:
                 try:
-                    logger.info(f"Starting investigation for {rollout.namespace}/{rollout.deployment}")
+                    status_info = f"status={rollout.status}, age={(datetime.utcnow() - rollout.started_at).total_seconds():.0f}s"
+                    logger.info(f"Starting investigation for {rollout.namespace}/{rollout.deployment} ({status_info})")
                     
                     # Agentic investigation
                     analysis = self._agent.investigate(rollout.deployment, rollout.namespace)

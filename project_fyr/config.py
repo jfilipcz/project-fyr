@@ -1,7 +1,7 @@
 """Settings for the Project Fyr service."""
 
-from typing import Optional
-from pydantic import Field
+from typing import Optional, List
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     langchain_model_name: str = Field(default="gpt-4o-mini")
     k8s_cluster_name: str = Field(default="ci-cluster")
     rollout_timeout_seconds: int = Field(default=15 * 60)
+    pending_investigation_threshold_seconds: int = Field(
+        default=300,
+        description="Seconds to wait before investigating a PENDING rollout (default: 5 minutes)"
+    )
     
     # Watch behavior
     watch_all_namespaces: bool = Field(
@@ -30,6 +34,20 @@ class Settings(BaseSettings):
         default=True,
         description="If True, allow namespace-level project-fyr/enabled annotation to enable watching all deployments in that namespace."
     )
+    
+    # System Namespaces - Filtered from monitoring and display
+    # Stored as comma-separated string to avoid JSON parsing issues from env vars
+    system_namespaces_str: str = Field(
+        default="kube-system,kube-public,kube-node-lease,default,monitoring,logging,ingress-nginx,cert-manager,flux-system,argocd,project-fyr,istio-system,elastic-system",
+        description="System namespaces to exclude from monitoring and display (comma-separated)"
+    )
+    
+    @property
+    def system_namespaces(self) -> List[str]:
+        """Get system_namespaces as a list."""
+        if not self.system_namespaces_str:
+            return []
+        return [ns.strip() for ns in self.system_namespaces_str.split(',') if ns.strip()]
 
     # Namespace Monitoring
     namespace_monitoring_enabled: bool = Field(
@@ -78,7 +96,113 @@ class Settings(BaseSettings):
 
     slack_mock_log_file: Optional[str] = Field(default=None)
     
+    # Slack Socket Mode (for internal apps without public URL)
+    slack_app_token: Optional[str] = Field(
+        default=None,
+        description="Slack App-Level Token (xapp-...) for Socket Mode connection"
+    )
+    slack_socket_mode_enabled: bool = Field(
+        default=False,
+        description="Enable Slack Socket Mode for slash commands and interactivity"
+    )
+    slack_signing_secret: Optional[str] = Field(
+        default=None,
+        description="Slack signing secret for request verification"
+    )
+    
+    # Fyr Dashboard URL (for deep links in Slack messages)
+    dashboard_base_url: Optional[str] = Field(
+        default=None,
+        description="Base URL for Fyr dashboard (e.g., https://fyr.internal.company.com)"
+    )
+    
     prometheus_url: Optional[str] = Field(default=None, description="Prometheus server URL")
+    
+    # Overview Insights Cache
+    insights_cache_ttl_minutes: int = Field(
+        default=60,
+        description="TTL for cached aggregated insights in minutes"
+    )
+    
+    # Authentication
+    auth_enabled: bool = Field(
+        default=False,
+        description="Enable authentication for dashboard access"
+    )
+    auth_mode: str = Field(
+        default="hybrid",
+        description="Authentication mode: 'sso', 'local', or 'hybrid'"
+    )
+    
+    # SSO Configuration
+    sso_provider: str = Field(
+        default="entra",
+        description="SSO provider: 'entra', 'okta', 'generic_oidc'"
+    )
+    sso_tenant_id: Optional[str] = Field(
+        default=None,
+        description="Azure AD / Entra ID tenant ID"
+    )
+    sso_client_id: Optional[str] = Field(
+        default=None,
+        description="SSO application client ID"
+    )
+    sso_client_secret: Optional[str] = Field(
+        default=None,
+        description="SSO client secret (for OIDC flows)"
+    )
+    
+    # Generic OIDC Configuration
+    oidc_issuer: Optional[str] = Field(
+        default=None,
+        description="OIDC issuer URL"
+    )
+    oidc_jwks_uri: Optional[str] = Field(
+        default=None,
+        description="OIDC JWKS URI for token validation"
+    )
+    oidc_audience: Optional[str] = Field(
+        default=None,
+        description="OIDC audience (e.g., api://your-app)"
+    )
+    
+    # Local Authentication
+    local_auth_enabled: bool = Field(
+        default=True,
+        description="Enable local username/password authentication"
+    )
+    local_auth_jwt_secret: str = Field(
+        default="change-me-in-production",
+        description="JWT secret for local auth tokens"
+    )
+    local_auth_jwt_expiry_hours: int = Field(
+        default=24,
+        description="JWT token expiry time in hours"
+    )
+    local_auth_session_expiry_hours: int = Field(
+        default=168,
+        description="Session expiry time in hours (7 days default)"
+    )
+    
+    # Default Admin User
+    admin_username: str = Field(
+        default="admin",
+        description="Default admin username"
+    )
+    admin_password: Optional[str] = Field(
+        default=None,
+        description="Default admin password (created on first startup)"
+    )
+    admin_email: str = Field(
+        default="admin@example.com",
+        description="Default admin email"
+    )
+    
+    # Authentication Excluded Paths
+    auth_exclude_paths: str = Field(
+        default="/health,/metrics,/static,/api/webhook",
+        description="Comma-separated list of path prefixes to exclude from authentication"
+    )
 
     class Config:
         env_prefix = "PROJECT_FYR_"

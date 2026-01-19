@@ -1,0 +1,103 @@
+{{- if .Values.slackHandler.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "project-fyr.fullname" . }}-slack-handler
+  labels:
+    {{- include "project-fyr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: slack-handler
+spec:
+  replicas: {{ .Values.slackHandler.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "project-fyr.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: slack-handler
+  template:
+    metadata:
+      labels:
+        {{- include "project-fyr.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: slack-handler
+    spec:
+      serviceAccountName: {{ include "project-fyr.serviceAccountName" . }}
+      containers:
+        - name: slack-handler
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.slackHandler.command }}
+          command:
+            {{- toYaml .Values.slackHandler.command | nindent 12 }}
+          {{- end }}
+          {{- if .Values.slackHandler.args }}
+          args:
+            {{- toYaml .Values.slackHandler.args | nindent 12 }}
+          {{- end }}
+          env:
+            - name: PROJECT_FYR_DATABASE_URL
+              value: {{ .Values.config.databaseUrl | quote }}
+            - name: PROJECT_FYR_K8S_CLUSTER_NAME
+              value: {{ .Values.config.clusterName | quote }}
+            - name: PROJECT_FYR_LANGCHAIN_MODEL_NAME
+              value: {{ .Values.config.langchainModelName | quote }}
+            {{- if .Values.config.slackBotToken }}
+            - name: PROJECT_FYR_SLACK_BOT_TOKEN
+              value: {{ .Values.config.slackBotToken | quote }}
+            {{- end }}
+            {{- if .Values.config.slackDefaultChannel }}
+            - name: PROJECT_FYR_SLACK_DEFAULT_CHANNEL
+              value: {{ .Values.config.slackDefaultChannel | quote }}
+            {{- end }}
+            # Socket Mode settings
+            - name: PROJECT_FYR_SLACK_SOCKET_MODE_ENABLED
+              value: {{ .Values.config.slack.socketModeEnabled | quote }}
+            {{- if .Values.config.slack.appToken }}
+            - name: PROJECT_FYR_SLACK_APP_TOKEN
+              value: {{ .Values.config.slack.appToken | quote }}
+            {{- end }}
+            {{- if .Values.config.slack.signingSecret }}
+            - name: PROJECT_FYR_SLACK_SIGNING_SECRET
+              value: {{ .Values.config.slack.signingSecret | quote }}
+            {{- end }}
+            {{- if .Values.config.dashboardBaseUrl }}
+            - name: PROJECT_FYR_DASHBOARD_BASE_URL
+              value: {{ .Values.config.dashboardBaseUrl | quote }}
+            {{- end }}
+            {{- if .Values.config.openaiApiKey }}
+            - name: PROJECT_FYR_OPENAI_API_KEY
+              value: {{ .Values.config.openaiApiKey | quote }}
+            {{- end }}
+            {{- if .Values.config.openaiApiBase }}
+            - name: PROJECT_FYR_OPENAI_API_BASE
+              value: {{ .Values.config.openaiApiBase | quote }}
+            {{- end }}
+            {{- if .Values.config.openaiApiVersion }}
+            - name: PROJECT_FYR_OPENAI_API_VERSION
+              value: {{ .Values.config.openaiApiVersion | quote }}
+            {{- end }}
+            {{- if .Values.config.azureDeployment }}
+            - name: PROJECT_FYR_AZURE_DEPLOYMENT
+              value: {{ .Values.config.azureDeployment | quote }}
+            {{- end }}
+            {{- if .Values.config.prometheusUrl }}
+            - name: PROJECT_FYR_PROMETHEUS_URL
+              value: {{ .Values.config.prometheusUrl | quote }}
+            {{- end }}
+          {{- if .Values.secrets.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.existingSecret }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.slackHandler.resources | nindent 12 }}
+      {{- with .Values.slackHandler.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.slackHandler.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.slackHandler.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

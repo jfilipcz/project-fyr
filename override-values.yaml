@@ -1,0 +1,5 @@
+image:
+  tag: system-namespaces
+
+config:
+  systemNamespaces: "kube-system,kube-public,kube-node-lease,default,monitoring,logging,ingress-nginx,cert-manager,flux-system,argocd,project-fyr,istio-system,elastic-system"

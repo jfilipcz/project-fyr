@@ -179,26 +179,73 @@
             background: #5a6268;
             text-decoration: none;
         }
+
+        .loading-banner {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 500;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+
+        .loading-banner.hidden {
+            display: none;
+        }
+
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 3px solid white;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6c757d;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
     </style>
 </head>
 
 <body>
     <h1>Project Fyr Rollouts</h1>
+    
+    <div id="loadingBanner" class="loading-banner">
+        <div class="spinner"></div>
+        <span>Loading rollouts from database...</span>
+    </div>
     <div class="filter-buttons">
-        <a href="/overview" class="filter-btn"
-            style="background-color: #6366f1; color: white; border-color: #6366f1;">Overview Dashboard</a>
+        <a href="/" class="filter-btn"
+            style="background-color: #6366f1; color: white; border-color: #6366f1;">&larr; Back to Overview</a>
         <span style="border-right: 1px solid #ccc; margin: 0 10px; height: 30px;"></span>
-        <a href="/" class="filter-btn {% if not current_status %}active{% endif %}">All</a>
-        <a href="/?status=failed{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
+        <a href="/rollouts" class="filter-btn {% if not current_status %}active{% endif %}">All</a>
+        <a href="/rollouts?status=failed{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
             class="filter-btn {% if current_status == 'failed' %}active{% endif %}">Failed</a>
-        <a href="/?status=success{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
+        <a href="/rollouts?status=success{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
             class="filter-btn {% if current_status == 'success' %}active{% endif %}">Success</a>
-        <a href="/?status=rolling_out{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
+        <a href="/rollouts?status=rolling_out{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
             class="filter-btn {% if current_status == 'rolling_out' %}active{% endif %}">Rolling Out</a>
-        <a href="/?status=pending{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
+        <a href="/rollouts?status=pending{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
             class="filter-btn {% if current_status == 'pending' %}active{% endif %}">Pending</a>
         <span style="flex-grow: 1;"></span>
-        <form method="get" class="search-form">
+        <form method="get" action="/rollouts" class="search-form">
             <input type="text" name="namespace" placeholder="Search by namespace..."
                 value="{{ current_namespace or '' }}" class="search-box">
             {% if current_status %}
@@ -206,7 +253,7 @@
             {% endif %}
             <button type="submit" class="search-btn">Search</button>
             {% if current_namespace %}
-            <a href="/?{% if current_status %}status={{ current_status }}{% endif %}" class="clear-btn">Clear</a>
+            <a href="/rollouts?{% if current_status %}status={{ current_status }}{% endif %}" class="clear-btn">Clear</a>
             {% endif %}
         </form>
         <span style="color: #6c757d; margin: 0 15px;">
@@ -216,7 +263,7 @@
         </span>
         <a href="/investigate" class="new-investigation-btn">+ New Investigation</a>
     </div>
-    <table>
+    <table id="rolloutsTable">
         <thead>
             <tr>
                 <th>ID</th>
@@ -229,25 +276,110 @@
                 <th>Actions</th>
             </tr>
         </thead>
-        <tbody>
-            {% for rollout in rollouts %}
+        <tbody id="rolloutsBody">
             <tr>
-                <td>{{ rollout.id }}</td>
-                <td>{{ rollout.cluster }}</td>
-                <td>{{ rollout.namespace }}</td>
-                <td>{{ rollout.deployment }}</td>
-                <td>
-                    <span class="status status-{{ rollout.status.lower().replace('_', '-') }}">
-                        {{ rollout.status }}
-                    </span>
-                </td>
-                <td>{{ rollout.started_at }}</td>
-                <td>{{ rollout.team or '-' }}</td>
-                <td><a href="/rollout/{{ rollout.id }}">View Details</a></td>
+                <td colspan="8" style="text-align: center; padding: 40px;">Loading...</td>
             </tr>
-            {% endfor %}
         </tbody>
     </table>
+    
+    <script>
+        // Get URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const currentStatus = '{{ current_status or "" }}';
+        const currentNamespace = '{{ current_namespace or "" }}';
+
+        function getStatusClass(status) {
+            return 'status-' + status.toLowerCase().replace('_', '-');
+        }
+
+        function formatDate(isoString) {
+            if (!isoString) return '-';
+            const date = new Date(isoString);
+            return date.toLocaleString();
+        }
+
+        async function loadRollouts() {
+            const banner = document.getElementById('loadingBanner');
+            const tbody = document.getElementById('rolloutsBody');
+            const countSpan = document.querySelector('.filter-buttons span[style*="color"]');
+            
+            try {
+                // Build query parameters
+                const params = new URLSearchParams();
+                if (currentStatus) params.append('status', currentStatus);
+                if (currentNamespace) params.append('namespace', currentNamespace);
+                
+                const response = await fetch(`/api/rollouts?${params.toString()}`);
+                if (!response.ok) {
+                    throw new Error(`Failed to load: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                const rollouts = data.rollouts;
+                
+                // Update count display
+                if (countSpan) {
+                    const plural = rollouts.length !== 1 ? 's' : '';
+                    const statusText = currentStatus ? ` (${currentStatus.toUpperCase()})` : '';
+                    const namespaceText = currentNamespace ? ` in <strong>${currentNamespace}</strong>` : '';
+                    countSpan.innerHTML = `Showing ${rollouts.length} rollout${plural}${statusText}${namespaceText}`;
+                }
+                
+                // Clear tbody
+                tbody.innerHTML = '';
+                
+                if (rollouts.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="8">
+                                <div class="empty-state">
+                                    <div class="empty-state-icon">📭</div>
+                                    <div>No rollouts found</div>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                } else {
+                    rollouts.forEach(rollout => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${rollout.id}</td>
+                            <td>${rollout.cluster}</td>
+                            <td>${rollout.namespace}</td>
+                            <td>${rollout.deployment}</td>
+                            <td>
+                                <span class="status ${getStatusClass(rollout.status)}">
+                                    ${rollout.status}
+                                </span>
+                            </td>
+                            <td>${formatDate(rollout.started_at)}</td>
+                            <td>${rollout.team || '-'}</td>
+                            <td><a href="/rollout/${rollout.id}">View Details</a></td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+                }
+                
+                // Hide banner
+                banner.classList.add('hidden');
+                
+            } catch (e) {
+                banner.style.background = '#dc3545';
+                banner.innerHTML = `<span>⚠️ Failed to load rollouts: ${e.message}</span>`;
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="8" style="text-align: center; padding: 40px; color: #dc3545;">
+                            Failed to load rollouts. Please refresh the page.
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+
+        // Load data when page loads
+        window.addEventListener('DOMContentLoaded', loadRollouts);
+    </script>
 </body>
 
 </html>

@@ -35,6 +35,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "project-fyr.fullname" . }}
+            - secretRef:
+                name: project-fyr-secrets
             {{- if .Values.secrets.existingSecret }}
             - secretRef:
                 name: {{ .Values.secrets.existingSecret }}

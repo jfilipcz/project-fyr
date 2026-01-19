@@ -9,6 +9,7 @@ from typing import Iterator, Optional, Any
 from sqlalchemy import JSON, DateTime, Enum as SAEnum, Integer, String, create_engine, select, update, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
+from .config import settings
 from .models import Analysis, AnalysisStatus, NotifyStatus, ReducedContext, RolloutStatus, NamespaceIncidentType, NamespaceIncidentStatus
 
 
@@ -137,6 +138,18 @@ class NamespaceIncidentRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AggregatedInsight(Base):
+    """Cached AI-generated insights for the overview dashboard."""
+    __tablename__ = "aggregated_insights"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cluster: Mapped[str] = mapped_column(String(255), index=True)
+    hours: Mapped[int] = mapped_column(Integer)  # Time window in hours
+    insights: Mapped[dict] = mapped_column(JSON)  # The aggregated insights result
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    failure_count: Mapped[int] = mapped_column(Integer)  # Number of failures analyzed
+
+
 def init_db(database_url: str):
     engine = create_engine(database_url, future=True)
     Base.metadata.create_all(engine)
@@ -186,13 +199,29 @@ class RolloutRepo:
         )
         with self.session() as s:
             return list(s.scalars(stmt))
-
-    def list_recent(self, limit: int = 50) -> list[Rollout]:
-        stmt = select(Rollout).order_by(Rollout.id.desc()).limit(limit)
+    
+    def list_stuck_pending(self, cluster: str, threshold_seconds: int) -> list[Rollout]:
+        """Find PENDING rollouts that have been pending for longer than threshold."""
+        from datetime import datetime, timedelta
+        threshold_time = datetime.utcnow() - timedelta(seconds=threshold_seconds)
+        stmt = select(Rollout).where(
+            Rollout.cluster == cluster,
+            Rollout.status == RolloutStatus.PENDING,
+            Rollout.started_at < threshold_time,
+            Rollout.analysis_status != AnalysisStatus.DONE,
+        )
         with self.session() as s:
             return list(s.scalars(stmt))
 
-    def list_by_status(self, status: str, limit: int = 50) -> list[Rollout]:
+    def list_recent(self, limit: int = 50, exclude_system: bool = True) -> list[Rollout]:
+        stmt = select(Rollout)
+        if exclude_system:
+            stmt = stmt.where(Rollout.namespace.notin_(settings.system_namespaces))
+        stmt = stmt.order_by(Rollout.id.desc()).limit(limit)
+        with self.session() as s:
+            return list(s.scalars(stmt))
+
+    def list_by_status(self, status: str, limit: int = 50, exclude_system: bool = True) -> list[Rollout]:
         """List rollouts filtered by status."""
         # Convert string to RolloutStatus enum
         try:
@@ -203,7 +232,10 @@ class RolloutRepo:
         
         stmt = select(Rollout).where(
             Rollout.status == status_enum
-        ).order_by(Rollout.id.desc()).limit(limit)
+        )
+        if exclude_system:
+            stmt = stmt.where(Rollout.namespace.notin_(settings.system_namespaces))
+        stmt = stmt.order_by(Rollout.id.desc()).limit(limit)
         with self.session() as s:
             return list(s.scalars(stmt))
 
@@ -215,24 +247,30 @@ class RolloutRepo:
         with self.session() as s:
             return list(s.scalars(stmt))
 
-    def get_stats(self, hours: int = 24) -> dict[str, int]:
+    def get_stats(self, hours: int = 24, exclude_system: bool = True) -> dict[str, int]:
         """Get rollout statistics for the last N hours."""
         cutoff = datetime.utcnow() - timedelta(hours=hours)
         
         # Total rollouts in window
         stmt_total = select(Rollout).where(Rollout.started_at >= cutoff)
+        if exclude_system:
+            stmt_total = stmt_total.where(Rollout.namespace.notin_(settings.system_namespaces))
         
         # Success count
         stmt_success = select(Rollout).where(
             Rollout.started_at >= cutoff,
             Rollout.status == RolloutStatus.SUCCESS
         )
+        if exclude_system:
+            stmt_success = stmt_success.where(Rollout.namespace.notin_(settings.system_namespaces))
         
         # Failed count
         stmt_failed = select(Rollout).where(
             Rollout.started_at >= cutoff,
             Rollout.status == RolloutStatus.FAILED
         )
+        if exclude_system:
+            stmt_failed = stmt_failed.where(Rollout.namespace.notin_(settings.system_namespaces))
 
         with self.session() as s:
             total = len(list(s.scalars(stmt_total)))
@@ -246,7 +284,7 @@ class RolloutRepo:
             "success_rate": round((success / total) * 100, 1) if total > 0 else 0
         }
 
-    def get_recent_failures(self, limit: int = 50, hours: int = 24) -> list[tuple[Rollout, Optional[AnalysisRecord]]]:
+    def get_recent_failures(self, limit: int = 50, hours: int = 24, exclude_system: bool = True) -> list[tuple[Rollout, Optional[AnalysisRecord]]]:
         """Get failed rollouts with their analysis records for the last N hours."""
         cutoff = datetime.utcnow() - timedelta(hours=hours)
         
@@ -259,9 +297,10 @@ class RolloutRepo:
                 Rollout.started_at >= cutoff,
                 Rollout.analysis_status == AnalysisStatus.DONE
             )
-            .order_by(Rollout.id.desc())
-            .limit(limit)
         )
+        if exclude_system:
+            stmt = stmt.where(Rollout.namespace.notin_(settings.system_namespaces))
+        stmt = stmt.order_by(Rollout.id.desc()).limit(limit)
         
         with self.session() as s:
             # Result is a list of Row objects (tuples)
@@ -360,6 +399,64 @@ class RolloutRepo:
         with self.session() as s:
             s.execute(stmt)
             s.commit()
+
+    def get_cached_insights(self, cluster: str, hours: int, ttl_minutes: int) -> Optional[AggregatedInsight]:
+        """Get cached aggregated insights if they exist and are fresh."""
+        cutoff = datetime.utcnow() - timedelta(minutes=ttl_minutes)
+        
+        stmt = (
+            select(AggregatedInsight)
+            .where(
+                AggregatedInsight.cluster == cluster,
+                AggregatedInsight.hours == hours,
+                AggregatedInsight.generated_at >= cutoff
+            )
+            .order_by(AggregatedInsight.generated_at.desc())
+            .limit(1)
+        )
+        
+        with self.session() as s:
+            return s.scalars(stmt).first()
+
+    def save_cached_insights(
+        self, 
+        cluster: str, 
+        hours: int, 
+        insights: dict[str, Any],
+        failure_count: int
+    ) -> AggregatedInsight:
+        """Save newly generated insights to cache."""
+        cached = AggregatedInsight(
+            cluster=cluster,
+            hours=hours,
+            insights=insights,
+            failure_count=failure_count,
+            generated_at=datetime.utcnow()
+        )
+        
+        with self.session() as s:
+            s.add(cached)
+            s.commit()
+            s.refresh(cached)
+        
+        return cached
+
+    def cleanup_old_insights(self, days: int = 7) -> int:
+        """Delete cached insights older than specified days."""
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        
+        stmt = select(AggregatedInsight).where(AggregatedInsight.generated_at < cutoff)
+        
+        with self.session() as s:
+            old_insights = list(s.scalars(stmt))
+            count = len(old_insights)
+            
+            for insight in old_insights:
+                s.delete(insight)
+            
+            s.commit()
+        
+        return count
 
 
 class AlertRepo:

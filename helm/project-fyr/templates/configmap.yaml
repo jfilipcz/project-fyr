@@ -16,10 +16,28 @@ data:
   {{- if hasKey .Values.config "namespaceLabelEnabled" }}
   PROJECT_FYR_NAMESPACE_LABEL_ENABLED: {{ .Values.config.namespaceLabelEnabled | quote }}
   {{- end }}
+  {{- if .Values.config.systemNamespaces }}
+  PROJECT_FYR_SYSTEM_NAMESPACES_STR: {{ .Values.config.systemNamespaces | quote }}
+  {{- end }}
   PROJECT_FYR_SLACK_BOT_TOKEN: {{ .Values.config.slackBotToken | quote }}
   PROJECT_FYR_SLACK_DEFAULT_CHANNEL: {{ .Values.config.slackDefaultChannel | quote }}
   {{- if .Values.config.slackApiUrl }}
   PROJECT_FYR_SLACK_API_URL: {{ .Values.config.slackApiUrl | quote }}
+  {{- end }}
+  # Slack Socket Mode configuration
+  {{- if .Values.config.slack }}
+  {{- if .Values.config.slack.socketModeEnabled }}
+  PROJECT_FYR_SLACK_SOCKET_MODE_ENABLED: {{ .Values.config.slack.socketModeEnabled | quote }}
+  {{- end }}
+  {{- if .Values.config.slack.appToken }}
+  PROJECT_FYR_SLACK_APP_TOKEN: {{ .Values.config.slack.appToken | quote }}
+  {{- end }}
+  {{- if .Values.config.slack.signingSecret }}
+  PROJECT_FYR_SLACK_SIGNING_SECRET: {{ .Values.config.slack.signingSecret | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.config.dashboardBaseUrl }}
+  PROJECT_FYR_DASHBOARD_BASE_URL: {{ .Values.config.dashboardBaseUrl | quote }}
   {{- end }}
   PROJECT_FYR_OPENAI_API_KEY: {{ .Values.config.openaiApiKey | quote }}
   PROJECT_FYR_LANGCHAIN_MODEL_NAME: {{ .Values.config.langchainModelName | quote }}
@@ -30,3 +48,38 @@ data:
   PROJECT_FYR_MAX_LOG_LINES: {{ .Values.config.maxLogLines | quote }}
   PROJECT_FYR_REDUCER_MAX_EVENTS: {{ .Values.config.reducerMaxEvents | quote }}
   PROJECT_FYR_REDUCER_MAX_CLUSTERS: {{ .Values.config.reducerMaxClusters | quote }}
+  {{- if .Values.auth.enabled }}
+  # Authentication configuration
+  PROJECT_FYR_AUTH_ENABLED: {{ .Values.auth.enabled | quote }}
+  PROJECT_FYR_AUTH_MODE: {{ .Values.auth.mode | quote }}
+  {{- if .Values.auth.sso.provider }}
+  PROJECT_FYR_SSO_PROVIDER: {{ .Values.auth.sso.provider | quote }}
+  {{- end }}
+  {{- if .Values.auth.sso.tenantId }}
+  PROJECT_FYR_SSO_TENANT_ID: {{ .Values.auth.sso.tenantId | quote }}
+  {{- end }}
+  {{- if .Values.auth.sso.clientId }}
+  PROJECT_FYR_SSO_CLIENT_ID: {{ .Values.auth.sso.clientId | quote }}
+  {{- end }}
+  {{- if .Values.auth.sso.clientSecret }}
+  PROJECT_FYR_SSO_CLIENT_SECRET: {{ .Values.auth.sso.clientSecret | quote }}
+  {{- end }}
+  PROJECT_FYR_LOCAL_AUTH_ENABLED: {{ .Values.auth.local.enabled | quote }}
+  {{- if .Values.auth.local.jwtSecret }}
+  PROJECT_FYR_LOCAL_AUTH_JWT_SECRET: {{ .Values.auth.local.jwtSecret | quote }}
+  {{- end }}
+  {{- if .Values.auth.local.jwtExpiryHours }}
+  PROJECT_FYR_LOCAL_AUTH_JWT_EXPIRY_HOURS: {{ .Values.auth.local.jwtExpiryHours | quote }}
+  {{- end }}
+  {{- if .Values.auth.local.sessionExpiryHours }}
+  PROJECT_FYR_LOCAL_AUTH_SESSION_EXPIRY_HOURS: {{ .Values.auth.local.sessionExpiryHours | quote }}
+  {{- end }}
+  PROJECT_FYR_ADMIN_USERNAME: {{ .Values.auth.admin.username | quote }}
+  {{- if .Values.auth.admin.password }}
+  PROJECT_FYR_ADMIN_PASSWORD: {{ .Values.auth.admin.password | quote }}
+  {{- end }}
+  PROJECT_FYR_ADMIN_EMAIL: {{ .Values.auth.admin.email | quote }}
+  {{- if .Values.auth.excludePaths }}
+  PROJECT_FYR_AUTH_EXCLUDE_PATHS: {{ .Values.auth.excludePaths | quote }}
+  {{- end }}
+  {{- end }}

@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from pydantic import BaseModel
 
 from .db import Rollout, AnalysisRecord
@@ -35,14 +35,30 @@ class IssueAggregator:
         api_version: str | None = None,
         azure_deployment: str | None = None,
     ):
-        self.llm = ChatOpenAI(
-            model=model_name,
-            api_key=api_key,
-            base_url=api_base,
-            api_version=api_version,
-            azure_deployment=azure_deployment,
-            temperature=0,
-        ).with_structured_output(AggregationResult)
+        # Use AzureChatOpenAI if Azure-specific parameters are provided
+        if azure_deployment and api_base:
+            llm = AzureChatOpenAI(
+                azure_deployment=azure_deployment,
+                api_version=api_version or "2024-08-01-preview",
+                azure_endpoint=api_base,
+                api_key=api_key,
+                temperature=0,
+            )
+        else:
+            # Use regular ChatOpenAI for OpenAI or other providers
+            llm_kwargs = {
+                "model": model_name,
+                "temperature": 0,
+            }
+            
+            if api_key:
+                llm_kwargs["api_key"] = api_key
+            if api_base:
+                llm_kwargs["base_url"] = api_base
+            
+            llm = ChatOpenAI(**llm_kwargs)
+        
+        self.llm = llm.with_structured_output(AggregationResult)
 
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", """You are an expert SRE / DevOps engineer analyzing a list of recent deployment failures.

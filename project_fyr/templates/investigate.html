@@ -38,12 +38,22 @@
         }
 
         select,
+        input[type="text"],
         button {
             width: 100%;
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 16px;
+        }
+        
+        #namespaceInput {
+            background-color: white;
+        }
+        
+        #namespaceInput:disabled {
+            background-color: #e9ecef;
+            cursor: not-allowed;
         }
 
         button {
@@ -89,23 +99,220 @@
             text-decoration: none;
             color: #007bff;
         }
+
+        .banner {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 500;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+
+        .banner.hidden {
+            display: none;
+        }
+
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 3px solid white;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .progress-container {
+            display: none;
+            margin-top: 20px;
+            margin-bottom: 20px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background-color: #e9ecef;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745 0%, #20c997 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .progress-text {
+            margin-top: 10px;
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+        }
+
+        /* Markdown rendering styles */
+        #result {
+            white-space: normal;
+        }
+
+        #result h1, #result h2, #result h3 {
+            margin-top: 1.5em;
+            margin-bottom: 0.5em;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        #result h1 {
+            font-size: 1.8em;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 0.3em;
+        }
+
+        #result h2 {
+            font-size: 1.5em;
+            border-bottom: 1px solid #ecf0f1;
+            padding-bottom: 0.3em;
+        }
+
+        #result h3 {
+            font-size: 1.2em;
+        }
+
+        #result p {
+            margin: 0.8em 0;
+            line-height: 1.6;
+        }
+
+        #result ul, #result ol {
+            margin: 0.8em 0;
+            padding-left: 2em;
+        }
+
+        #result li {
+            margin: 0.4em 0;
+            line-height: 1.6;
+        }
+
+        #result code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        #result pre {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            margin: 1em 0;
+        }
+
+        #result pre code {
+            background: none;
+            padding: 0;
+            color: inherit;
+        }
+
+        #result blockquote {
+            border-left: 4px solid #3498db;
+            margin: 1em 0;
+            padding-left: 1em;
+            color: #555;
+            font-style: italic;
+        }
+
+        #result table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 1em 0;
+        }
+
+        #result th, #result td {
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        #result th {
+            background: #3498db;
+            color: white;
+            font-weight: 600;
+        }
+
+        #result tr:nth-child(even) {
+            background: #f9f9f9;
+        }
+
+        #result strong {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        #result em {
+            font-style: italic;
+            color: #555;
+        }
+
+        #result hr {
+            border: none;
+            border-top: 2px solid #ecf0f1;
+            margin: 2em 0;
+        }
+
+        #result a {
+            color: #3498db;
+            text-decoration: none;
+        }
+
+        #result a:hover {
+            text-decoration: underline;
+        }
+
+        .markdown-body {
+            box-sizing: border-box;
+            min-width: 200px;
+            max-width: 980px;
+        }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 
 <body>
     <div class="nav">
         <a href="/">← Back to Dashboard</a>
     </div>
+    
+    <div id="loadingBanner" class="banner">
+        <div class="spinner"></div>
+        <span>Loading deployment data from cluster...</span>
+    </div>
+    
     <div class="container">
         <h1>On-Demand Investigation</h1>
         <div class="form-group">
-            <label for="namespace">Namespace</label>
-            <select id="namespace" onchange="updateDeployments()">
-                <option value="">Select Namespace</option>
-                {% for ns in namespaces %}
-                <option value="{{ ns }}">{{ ns }}</option>
-                {% endfor %}
-            </select>
+            <label for="namespaceInput">Namespace</label>
+            <input type="text" id="namespaceInput" list="namespaceList" placeholder="Type to search namespaces..." 
+                   oninput="updateDeploymentsFromInput()" disabled />
+            <datalist id="namespaceList"></datalist>
         </div>
         <div class="form-group">
             <label>
@@ -118,30 +325,132 @@
                 <option value="">Select Namespace First</option>
             </select>
         </div>
-        <button id="investigateBtn" onclick="runInvestigation()" disabled>Start Investigation</button>
+        
+        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+            <button id="investigateBtn" onclick="runInvestigation()" disabled style="flex: 1;" 
+                    title="Analyzes a specific deployment in detail, investigating pod issues, logs, events, and resource problems">
+                Analyze Deployment
+            </button>
+            <button id="analyzeNamespaceBtn" onclick="analyzeNamespace()" disabled style="flex: 1; background-color: #28a745;"
+                    title="Analyzes all resources in the namespace, providing an overview of deployments, pods, events, and AI-powered recommendations">
+                Analyze Namespace
+            </button>
+        </div>
 
         <div id="loading" class="loading">
             Investigating... This may take a minute.
         </div>
 
+        <!-- Progress Bar for Namespace Analysis -->
+        <div id="progressContainer" class="progress-container">
+            <div class="progress-bar">
+                <div id="progressFill" class="progress-fill">0%</div>
+            </div>
+            <div id="progressText" class="progress-text">Initializing analysis...</div>
+        </div>
+
         <div id="result"></div>
+        
+        <!-- Chat Interface -->
+        <div id="chatContainer" style="display: none; margin-top: 30px; border-top: 2px solid #ddd; padding-top: 20px;">
+            <h2>💬 Chat with SRE Agent</h2>
+            <div id="chatMessages" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 4px; padding: 15px; min-height: 300px; max-height: 500px; overflow-y: auto; margin-bottom: 15px;">
+                <div id="placeholderText" style="color: #666; font-style: italic;">Ask questions about the namespace or deployment issues...</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <input type="text" id="chatInput" placeholder="Ask a question..." 
+                       style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px;"
+                       onkeypress="if(event.key === 'Enter') sendChatMessage()">
+                <button onclick="sendChatMessage()" id="chatSendBtn" 
+                        style="width: auto; padding: 10px 20px; background-color: #007bff;">
+                    Send
+                </button>
+            </div>
+        </div>
     </div>
 
     <script>
-        const deployments = {{ deployments | tojson }};
-        const statuses = {{ deployment_statuses | tojson }};
+        let deployments = {};
+        let statuses = {};
+        let chatHistory = [];
+        let currentNamespace = '';
+        let currentDeployment = '';
 
-        function updateDeployments() {
-            const nsSelect = document.getElementById('namespace');
+        // Load deployment data on page load
+        async function loadDeploymentData() {
+            const banner = document.getElementById('loadingBanner');
+            const nsInput = document.getElementById('namespaceInput');
+            const nsDatalist = document.getElementById('namespaceList');
+            
+            try {
+                const response = await fetch('/api/investigate/deployments');
+                if (!response.ok) {
+                    throw new Error(`Failed to load: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                deployments = data.deployments;
+                statuses = data.deployment_statuses;
+                
+                // Populate namespace datalist
+                nsDatalist.innerHTML = '';
+                data.namespaces.forEach(ns => {
+                    const option = document.createElement('option');
+                    option.value = ns;
+                    nsDatalist.appendChild(option);
+                });
+                nsInput.disabled = false;
+                nsInput.placeholder = 'Type to search namespaces...';
+                
+                // Hide banner
+                banner.classList.add('hidden');
+                
+            } catch (e) {
+                banner.style.background = '#dc3545';
+                banner.innerHTML = `<span>⚠️ Failed to load deployment data: ${e.message}</span>`;
+            }
+        }
+
+        // Load data when page loads
+        window.addEventListener('DOMContentLoaded', loadDeploymentData);
+        
+        function updateDeploymentsFromInput() {
+            const nsInput = document.getElementById('namespaceInput');
+            const ns = nsInput.value;
+            
+            // Check if the entered value is a valid namespace
+            const dataList = document.getElementById('namespaceList');
+            const options = Array.from(dataList.options);
+            const isValid = options.some(opt => opt.value === ns);
+            
+            if (isValid) {
+                updateDeployments(ns);
+            } else {
+                // Clear deployment dropdown if invalid namespace
+                const depSelect = document.getElementById('deployment');
+                const btn = document.getElementById('investigateBtn');
+                const analyzeBtn = document.getElementById('analyzeNamespaceBtn');
+                
+                depSelect.innerHTML = '<option value="">Select valid namespace first</option>';
+                depSelect.disabled = true;
+                btn.disabled = true;
+                analyzeBtn.disabled = true;
+            }
+        }
+
+        function updateDeployments(namespace) {
+            const nsInput = document.getElementById('namespaceInput');
             const depSelect = document.getElementById('deployment');
             const failingOnlyCheckbox = document.getElementById('failingOnly');
             const btn = document.getElementById('investigateBtn');
-            const ns = nsSelect.value;
+            const analyzeBtn = document.getElementById('analyzeNamespaceBtn');
+            const ns = namespace || nsInput.value;
             const failingOnly = failingOnlyCheckbox.checked;
 
             depSelect.innerHTML = '<option value="">Select Deployment</option>';
             depSelect.disabled = !ns;
             btn.disabled = true;
+            analyzeBtn.disabled = !ns;  // Enable namespace analysis when namespace is selected
 
             if (ns && deployments[ns]) {
                 let filteredDeployments = deployments[ns];
@@ -175,7 +484,7 @@
         });
 
         async function runInvestigation() {
-            const ns = document.getElementById('namespace').value;
+            const ns = document.getElementById('namespaceInput').value;
             const dep = document.getElementById('deployment').value;
             const btn = document.getElementById('investigateBtn');
             const loading = document.getElementById('loading');
@@ -201,21 +510,269 @@
 
                 const data = await response.json();
 
-                let output = `Summary: ${data.summary}\n\n`;
-                output += `Likely Cause: ${data.likely_cause}\n\n`;
-                output += `Severity: ${data.severity}\n\n`;
-                output += `Recommended Steps:\n${data.recommended_steps.map(s => '- ' + s).join('\n')}`;
+                let output = `## Summary\n\n${data.summary}\n\n`;
+                output += `## Likely Cause\n\n${data.likely_cause}\n\n`;
+                output += `## Severity\n\n${data.severity}\n\n`;
+                output += `## Recommended Steps\n\n${data.recommended_steps.map(s => '- ' + s).join('\n')}`;
 
-                resultDiv.textContent = output;
+                // Render Markdown to HTML
+                resultDiv.innerHTML = marked.parse(output);
                 resultDiv.style.display = 'block';
+                resultDiv.style.color = ''; // Reset color
+                
+                // Enable chat after successful investigation
+                document.getElementById('chatContainer').style.display = 'block';
+                currentNamespace = ns;
+                currentDeployment = dep;
+                chatHistory = []; // Reset chat history for new investigation
 
             } catch (e) {
-                resultDiv.textContent = `Investigation failed: ${e.message}`;
+                resultDiv.innerHTML = `<p style="color: red;"><strong>Investigation failed:</strong> ${e.message}</p>`;
                 resultDiv.style.display = 'block';
-                resultDiv.style.color = 'red';
             } finally {
                 btn.disabled = false;
                 loading.style.display = 'none';
+            }
+        }
+        
+        async function analyzeNamespace() {
+            const ns = document.getElementById('namespaceInput').value;
+            const btn = document.getElementById('analyzeNamespaceBtn');
+            const loading = document.getElementById('loading');
+            const resultDiv = document.getElementById('result');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+
+            if (!ns) return;
+
+            btn.disabled = true;
+            loading.style.display = 'none';
+            resultDiv.style.display = 'none';
+            resultDiv.textContent = '';
+            
+            // Show progress bar
+            progressContainer.style.display = 'block';
+            progressFill.style.width = '0%';
+            progressFill.textContent = '0%';
+            progressText.textContent = 'Initializing namespace analysis...';
+
+            // Simulate progress since we can't get real-time updates
+            const progressSteps = [
+                { percent: 15, text: 'Gathering deployment information...' },
+                { percent: 30, text: 'Checking pod health status...' },
+                { percent: 45, text: 'Collecting events and logs...' },
+                { percent: 60, text: 'AI agent investigating issues...' },
+                { percent: 75, text: 'Analyzing patterns and root causes...' },
+                { percent: 90, text: 'Generating recommendations...' }
+            ];
+            
+            let currentStep = 0;
+            const progressInterval = setInterval(() => {
+                if (currentStep < progressSteps.length) {
+                    const step = progressSteps[currentStep];
+                    progressFill.style.width = step.percent + '%';
+                    progressFill.textContent = step.percent + '%';
+                    progressText.textContent = step.text;
+                    currentStep++;
+                }
+            }, 3000); // Update every 3 seconds
+
+            try {
+                const response = await fetch(`/api/investigate/namespace/${encodeURIComponent(ns)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                
+                // Complete the progress bar
+                clearInterval(progressInterval);
+                progressFill.style.width = '100%';
+                progressFill.textContent = '100%';
+                progressText.textContent = 'Analysis complete!';
+                
+                // Hide progress bar after a moment
+                setTimeout(() => {
+                    progressContainer.style.display = 'none';
+                }, 1500);
+
+                // Format the output in Markdown
+                let output = '# Namespace Analysis\n\n';
+                
+                // Summary
+                output += `**Namespace:** ${data.summary.namespace}\n\n`;
+                output += `**Total Deployments:** ${data.summary.total_deployments}\n\n`;
+                output += `**Failing Deployments:** ${data.summary.failing_deployments}\n\n`;
+                output += `**Total Pods:** ${data.summary.total_pods}\n\n`;
+                output += `**Unhealthy Pods:** ${data.summary.unhealthy_pods}\n\n`;
+                
+                // Deployments with issues
+                if (data.deployments && data.deployments.length > 0) {
+                    const failingDeployments = data.deployments.filter(d => !d.healthy);
+                    if (failingDeployments.length > 0) {
+                        output += '## Failing Deployments\n\n';
+                        failingDeployments.forEach(dep => {
+                            output += `### ${dep.name}\n\n`;
+                            output += `- **Status:** ${dep.ready_replicas}/${dep.desired_replicas} replicas ready\n`;
+                            if (dep.conditions && dep.conditions.length > 0) {
+                                dep.conditions.forEach(cond => {
+                                    if (cond.status !== 'True') {
+                                        output += `- **${cond.type}:** ${cond.message}\n`;
+                                    }
+                                });
+                            }
+                            output += '\n';
+                        });
+                    }
+                }
+                
+                // Pods with issues
+                if (data.pods && data.pods.length > 0) {
+                    const unhealthyPods = data.pods.filter(p => !p.healthy);
+                    if (unhealthyPods.length > 0) {
+                        output += '## Unhealthy Pods\n\n';
+                        unhealthyPods.forEach(pod => {
+                            output += `### ${pod.name}\n\n`;
+                            output += `- **Phase:** ${pod.phase}\n`;
+                            if (pod.issues && pod.issues.length > 0) {
+                                pod.issues.forEach(issue => {
+                                    output += `- ${issue}\n`;
+                                });
+                            }
+                            output += '\n';
+                        });
+                    }
+                }
+                
+                // Recent events
+                if (data.events && data.events.length > 0) {
+                    const warningEvents = data.events.filter(e => e.type === 'Warning' || e.type === 'Error');
+                    if (warningEvents.length > 0) {
+                        output += '## Recent Warnings/Errors\n\n';
+                        warningEvents.slice(0, 10).forEach(event => {
+                            output += `### ${event.type}: ${event.reason}\n\n`;
+                            output += `- **Object:** ${event.object}\n`;
+                            output += `- **Message:** ${event.message}\n\n`;
+                        });
+                    }
+                }
+                
+                // AI Analysis
+                if (data.analysis) {
+                    output += '## AI Analysis & Recommendations\n\n';
+                    output += data.analysis;
+                } else if (!data.summary.has_issues) {
+                    output += '## Status\n\n';
+                    output += '✅ No issues detected in this namespace. All deployments and pods are healthy!';
+                }
+
+                // Render Markdown to HTML
+                resultDiv.innerHTML = marked.parse(output);
+                resultDiv.style.display = 'block';
+                
+                // Enable chat after successful investigation
+                document.getElementById('chatContainer').style.display = 'block';
+                currentNamespace = ns;
+                chatHistory = []; // Reset chat history for new investigation
+
+            } catch (e) {
+                clearInterval(progressInterval);
+                progressContainer.style.display = 'none';
+                resultDiv.innerHTML = `<p style="color: red;"><strong>Namespace analysis failed:</strong> ${e.message}</p>`;
+                resultDiv.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                loading.style.display = 'none';
+                loading.textContent = 'Investigating... This may take a minute.';
+            }
+        }
+        
+        async function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const messagesDiv = document.getElementById('chatMessages');
+            const sendBtn = document.getElementById('chatSendBtn');
+            
+            const userMessage = input.value.trim();
+            if (!userMessage) return;
+            
+            // Remove placeholder text if this is the first message
+            const placeholderText = document.getElementById('placeholderText');
+            if (placeholderText) {
+                placeholderText.remove();
+            }
+            
+            // Add user message to chat history
+            chatHistory.push({
+                role: 'user',
+                content: userMessage
+            });
+            
+            // Display user message
+            const userMsgDiv = document.createElement('div');
+            userMsgDiv.style.cssText = 'margin-bottom: 15px; padding: 10px; background: #007bff; color: white; border-radius: 8px; margin-left: 20%;';
+            userMsgDiv.textContent = userMessage;
+            messagesDiv.appendChild(userMsgDiv);
+            
+            // Clear input and disable send button
+            input.value = '';
+            input.disabled = true;
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Thinking...';
+            
+            // Scroll to bottom
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            try {
+                const response = await fetch('/api/investigate/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        namespace: currentNamespace,
+                        deployment: currentDeployment,
+                        messages: chatHistory
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Chat request failed');
+                }
+                
+                const data = await response.json();
+                
+                // Add assistant response to chat history
+                chatHistory.push({
+                    role: 'assistant',
+                    content: data.response
+                });
+                
+                // Display assistant message
+                const assistantMsgDiv = document.createElement('div');
+                assistantMsgDiv.style.cssText = 'margin-bottom: 15px; padding: 10px; background: white; border: 1px solid #ddd; border-radius: 8px; margin-right: 20%;';
+                assistantMsgDiv.innerHTML = marked.parse(data.response);
+                messagesDiv.appendChild(assistantMsgDiv);
+                
+            } catch (e) {
+                // Display error message
+                const errorMsgDiv = document.createElement('div');
+                errorMsgDiv.style.cssText = 'margin-bottom: 15px; padding: 10px; background: #ffebee; color: #c62828; border-radius: 8px; border: 1px solid #ef5350;';
+                errorMsgDiv.textContent = `Error: ${e.message}`;
+                messagesDiv.appendChild(errorMsgDiv);
+            } finally {
+                input.disabled = false;
+                sendBtn.disabled = false;
+                sendBtn.textContent = 'Send';
+                input.focus();
+                
+                // Scroll to bottom
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
             }
         }
     </script>

@@ -34,6 +34,7 @@ class SlackNotifier:
         analysis: Analysis,
         metadata: dict | None = None,
         max_attempts: int = 2,
+        rollout_id: int | None = None,
     ) -> bool:
         if not self._enabled:
             return False
@@ -42,7 +43,34 @@ class SlackNotifier:
         if not target_channel:
             return False
 
-        payload = self._build_blocks(rollout_ref, analysis, metadata or {})
+        # Use enhanced blocks with buttons if rollout_id provided
+        if rollout_id is not None:
+            from .slack_blocks import build_failure_notification
+            
+            # Extract metadata fields
+            meta = metadata or {}
+            namespace = meta.get("namespace")
+            deployment = meta.get("deployment")
+            
+            # Parse namespace/deployment from rollout_ref if not in metadata
+            if not namespace and "/" in rollout_ref:
+                parts = rollout_ref.split("/")
+                if len(parts) >= 2:
+                    namespace = parts[0]
+                    deployment = parts[1] if len(parts) > 1 else None
+            
+            payload = build_failure_notification(
+                rollout_ref=rollout_ref,
+                analysis=analysis,
+                rollout_id=rollout_id,
+                namespace=namespace,
+                deployment=deployment,
+                cluster=meta.get("cluster"),
+                team=meta.get("team"),
+                pipeline_url=meta.get("pipeline_url"),
+            )
+        else:
+            payload = self._build_blocks(rollout_ref, analysis, metadata or {})
         
         # Mock mode: write to log file instead of posting to Slack
         if self._mock_mode:

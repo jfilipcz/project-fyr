@@ -28,6 +28,21 @@ analyzer:
   tolerations: []
   affinity: {}
 
+# Slack Socket Mode handler for slash commands and interactivity
+# This connects to Slack via WebSocket (no public URL needed)
+slackHandler:
+  enabled: false
+  replicaCount: 1
+  command:
+    - python
+    - -m
+    - project_fyr.slack_handler
+  args: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 dashboard:
   replicaCount: 1
   command:
@@ -106,12 +121,32 @@ config:
   # for all deployments in that namespace (ignored if watchAllNamespaces=true)
   namespaceLabelEnabled: true
   
+  # System namespaces to exclude from monitoring
+  # These namespaces will not be watched for deployments, even if watchAllNamespaces=true
+  # Comma-separated list of namespace names
+  systemNamespaces: "kube-system,kube-public,kube-node-lease,default,monitoring,logging,ingress-nginx,cert-manager,flux-system,argocd,project-fyr,istio-system,elastic-system"
+  
   # Slack bot token (xoxb-...) - recommend using existingSecret instead
   slackBotToken: ""
   # Default Slack channel for notifications (e.g., #deployments)
   slackDefaultChannel: "#alerts"
   # Optional: Override Slack API URL (useful for testing with mock service)
   slackApiUrl: ""
+  
+  # Slack Socket Mode configuration (for slash commands without public URL)
+  slack:
+    # Enable Socket Mode for slash commands and interactivity
+    socketModeEnabled: false
+    # App-Level Token (xapp-...) for Socket Mode connection
+    # Required if socketModeEnabled is true
+    appToken: ""
+    # Signing secret for request verification
+    signingSecret: ""
+  
+  # Fyr Dashboard base URL (for deep links in Slack messages)
+  # e.g., https://fyr.internal.company.com
+  dashboardBaseUrl: ""
+  
   # OpenAI API key - recommend using existingSecret instead
   openaiApiKey: ""
   # OpenAI API base URL (for Azure OpenAI, set to https://your-resource.openai.azure.com)
@@ -125,10 +160,57 @@ config:
   # Prometheus URL for metrics queries (optional)
   prometheusUrl: ""
 
+# Authentication configuration
+auth:
+  # Enable authentication for dashboard access
+  enabled: true
+  # Authentication mode: 'sso', 'local', or 'hybrid'
+  mode: hybrid
+  
+  # SSO Configuration (Microsoft Entra ID / Azure AD)
+  sso:
+    # SSO provider: 'entra', 'okta', 'generic_oidc'
+    provider: entra
+    # Azure AD / Entra ID tenant ID (e.g., xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+    tenantId: "REDACTED-TENANT-ID"
+    # Application (client) ID from Azure AD app registration
+    clientId: "REDACTED-CLIENT-ID"
+    # Client secret (recommend using existingSecret instead)
+    clientSecret: ""
+  
+  # Local Authentication Configuration
+  local:
+    # Enable local username/password authentication
+    enabled: true
+    # JWT secret for token signing (recommend using existingSecret instead)
+    # Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    jwtSecret: ""
+    # JWT token expiry in hours
+    jwtExpiryHours: 24
+    # Session expiry in hours
+    sessionExpiryHours: 168  # 7 days
+  
+  # Default admin user (created on first startup if it doesn't exist)
+  admin:
+    # Admin username
+    username: admin
+    # Admin password (recommend using existingSecret instead)
+    password: ""
+    # Admin email
+    email: admin@example.com
+  
+  # Paths excluded from authentication (comma-separated)
+  # These paths are accessible without login
+  excludePaths: "/health,/metrics,/static,/api/webhook"
+
 secrets:
   # Name of an existing Secret created by External Secret Operator that contains
   # any PROJECT_FYR_* keys (e.g., Slack tokens, OpenAI API keys, DB credentials).
-  existingSecret: ""
+  # For auth, can include:
+  #   PROJECT_FYR_SSO_CLIENT_SECRET
+  #   PROJECT_FYR_LOCAL_AUTH_JWT_SECRET
+  #   PROJECT_FYR_ADMIN_PASSWORD
+  existingSecret: "fyr-auth-secrets"
 
 mysql:
   enabled: false
