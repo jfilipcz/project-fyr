@@ -171,10 +171,10 @@ auth:
   sso:
     # SSO provider: 'entra', 'okta', 'generic_oidc'
     provider: entra
-    # Azure AD / Entra ID tenant ID (e.g., xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
-    tenantId: "REDACTED-TENANT-ID"
-    # Application (client) ID from Azure AD app registration
-    clientId: "REDACTED-CLIENT-ID"
+    # Azure AD / Entra ID tenant ID - set via existingSecret or override
+    tenantId: ""
+    # Application (client) ID from Azure AD app registration - set via existingSecret or override
+    clientId: ""
     # Client secret (recommend using existingSecret instead)
     clientSecret: ""
   

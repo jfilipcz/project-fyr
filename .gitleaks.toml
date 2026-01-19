@@ -1,0 +1,27 @@
+# Gitleaks configuration for Project Fyr
+# https://github.com/gitleaks/gitleaks
+
+[extend]
+# Use the default gitleaks config as base
+useDefault = true
+
+# Custom rules to detect Azure AD / Entra ID identifiers
+[[rules]]
+id = "azure-tenant-id"
+description = "Azure AD / Entra ID Tenant ID"
+regex = '''tenantId["']?\s*[:=]\s*["']([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["']'''
+keywords = ["tenantid"]
+
+[[rules]]
+id = "azure-client-id"
+description = "Azure AD / Entra ID Client ID"
+regex = '''clientId["']?\s*[:=]\s*["']([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["']'''
+keywords = ["clientid"]
+
+# Paths to ignore (virtual environments, build artifacts)
+[allowlist]
+paths = [
+    '''\.venv/.*''',
+    '''__pycache__/.*''',
+    '''\.egg-info/.*''',
+]
