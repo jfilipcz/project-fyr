@@ -1,3 +1,4 @@
+<img width="1024" height="1024" alt="image" src="https://github.com/user-attachments/assets/df4ca41e-cdc3-427e-8142-518db938cd36" />
 # Project Fyr
 
 Project Fyr is an agentic AI assistant that watches Kubernetes deployments and namespaces, inspects failures, enriches them using namespace annotations, and posts concise guidance to Slack. It contains:
