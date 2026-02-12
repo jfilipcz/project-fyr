@@ -1,0 +1,25 @@
+{
+  "name": "project-fyr-e2e-tests",
+  "version": "1.0.0",
+  "description": "End-to-end tests for Project Fyr using Playwright",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:ui": "playwright test --ui",
+    "test:chromium": "playwright test --project=chromium",
+    "test:firefox": "playwright test --project=firefox",
+    "test:webkit": "playwright test --project=webkit",
+    "test:auth": "playwright test tests/auth.spec.ts",
+    "test:dashboard": "playwright test tests/dashboard-overview.spec.ts",
+    "test:rollout": "playwright test tests/rollout-detail.spec.ts",
+    "test:investigate": "playwright test tests/investigate.spec.ts",
+    "test:slack": "playwright test tests/slack-integration.spec.ts",
+    "report": "playwright show-report",
+    "codegen": "playwright codegen http://localhost:8080"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/node": "^20.0.0"
+  }
+}

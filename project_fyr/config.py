@@ -24,6 +24,10 @@ class Settings(BaseSettings):
         default=300,
         description="Seconds to wait before investigating a PENDING rollout (default: 5 minutes)"
     )
+    speculative_analysis_grace_seconds: int = Field(
+        default=300,
+        description="Seconds to wait before starting speculative analysis on ROLLING_OUT deployments (default: 5 minutes)"
+    )
     
     # Watch behavior
     watch_all_namespaces: bool = Field(
@@ -79,13 +83,13 @@ class Settings(BaseSettings):
         description="Time window for counting container restarts"
     )
     
-    # Rate Limiting
+    # Rate Limiting (configurable via env: MAX_INVESTIGATIONS_PER_NAMESPACE_PER_HOUR, MAX_INVESTIGATIONS_PER_CLUSTER_PER_HOUR)
     max_investigations_per_namespace_per_hour: int = Field(
-        default=2,
+        default=10,
         description="Maximum investigations (rollouts + namespace incidents) per namespace per hour"
     )
     max_investigations_per_cluster_per_hour: int = Field(
-        default=20,
+        default=40,
         description="Maximum investigations cluster-wide per hour"
     )
 
@@ -109,6 +113,20 @@ class Settings(BaseSettings):
         default=None,
         description="Slack signing secret for request verification"
     )
+
+    # Slack routing toggles
+    enable_requestor_dm: bool = Field(
+        default=False,
+        description="Enable requestor DM routing based on namespace annotation"
+    )
+    enable_owner_channel: bool = Field(
+        default=False,
+        description="Enable owner channel routing based on deployment label"
+    )
+    slack_routing_cache_ttl_seconds: int = Field(
+        default=3600,
+        description="TTL for Slack user/channel routing cache"
+    )
     
     # Fyr Dashboard URL (for deep links in Slack messages)
     dashboard_base_url: Optional[str] = Field(
@@ -122,6 +140,16 @@ class Settings(BaseSettings):
     insights_cache_ttl_minutes: int = Field(
         default=60,
         description="TTL for cached aggregated insights in minutes"
+    )
+
+    overview_show_ai_summary: bool = Field(
+        default=False,
+        description="Show AI summary text on the overview dashboard"
+    )
+
+    show_triage_in_slack: bool = Field(
+        default=False,
+        description="Show triage assignment block in Slack notifications"
     )
     
     # Authentication

@@ -46,32 +46,176 @@ def test_repo_create_rollout(repo):
 
 def test_analyze_pod_failures():
     pod1 = MagicMock()
+    pod1.metadata.name = "pod1"
     pod1.status.phase = "Running"
     pod1.status.container_statuses = []
+    pod1.status.init_container_statuses = []
+    pod1.status.conditions = []
     
     pod2 = MagicMock()
+    pod2.metadata.name = "pod2"
     pod2.status.phase = "Running"
     cs = MagicMock()
     cs.state.waiting.reason = "CrashLoopBackOff"
+    cs.state.waiting.message = "Back-off restarting failed container"
     pod2.status.container_statuses = [cs]
+    pod2.status.init_container_statuses = []
+    pod2.status.conditions = []
 
     pod3 = MagicMock()
+    pod3.metadata.name = "pod3"
     pod3.status.phase = "Pending"
     pod3.status.container_statuses = []
+    pod3.status.init_container_statuses = []
+    # Add Unschedulable condition
+    condition = MagicMock()
+    condition.type = "PodScheduled"
+    condition.status = "False"
+    condition.reason = "Unschedulable"
+    condition.message = "0/3 nodes are available: insufficient cpu"
+    pod3.status.conditions = [condition]
 
     pods = [pod1, pod2, pod3]
     signals = analyze_pod_failures(pods)
     
     assert signals.total_pods == 3
     assert signals.crashloop_pods == 1
-    assert signals.pending_scheduling_pods == 1
+    assert signals.unschedulable_pods == 1
+
+
+def test_analyze_pod_failures_config_errors():
+    """Test detection of CreateContainerConfigError (missing Secret/ConfigMap)."""
+    pod = MagicMock()
+    pod.metadata.name = "config-error-pod"
+    pod.status.phase = "Pending"
+    pod.status.init_container_statuses = []
+    pod.status.conditions = []
+    
+    cs = MagicMock()
+    cs.state.waiting.reason = "CreateContainerConfigError"
+    cs.state.waiting.message = "secret 'db-credentials' not found"
+    pod.status.container_statuses = [cs]
+    
+    signals = analyze_pod_failures([pod])
+    
+    assert signals.config_error_pods == 1
+    assert signals.total_failing == 1
+    assert len(signals.failure_reasons) == 1
+    assert "CreateContainerConfigError" in signals.failure_reasons[0]
+
+
+def test_analyze_pod_failures_image_pull():
+    """Test detection of various image pull errors."""
+    pods = []
+    
+    for reason in ["ImagePullBackOff", "ErrImagePull", "InvalidImageName"]:
+        pod = MagicMock()
+        pod.metadata.name = f"pod-{reason}"
+        pod.status.phase = "Pending"
+        pod.status.init_container_statuses = []
+        pod.status.conditions = []
+        cs = MagicMock()
+        cs.state.waiting.reason = reason
+        cs.state.waiting.message = "test message"
+        pod.status.container_statuses = [cs]
+        pods.append(pod)
+    
+    signals = analyze_pod_failures(pods)
+    
+    assert signals.image_pull_pods == 3
+    assert signals.total_failing == 3
+
+
+def test_analyze_pod_failures_init_container():
+    """Test detection of init container failures."""
+    pod = MagicMock()
+    pod.metadata.name = "init-crash-pod"
+    pod.status.phase = "Pending"
+    pod.status.container_statuses = []
+    pod.status.conditions = []
+    
+    # Init container in CrashLoopBackOff
+    init_cs = MagicMock()
+    init_cs.state.waiting.reason = "CrashLoopBackOff"
+    init_cs.state.waiting.message = "Init container failed"
+    pod.status.init_container_statuses = [init_cs]
+    
+    signals = analyze_pod_failures([pod])
+    
+    assert signals.crashloop_pods == 1
+    assert signals.total_failing == 1
+
 
 def test_should_fail_early():
-    signals = PodFailureSignals(total_pods=5, crashloop_pods=3)
+    # Crashloop is a permanent failure, should fail early
+    signals = PodFailureSignals(total_pods=5, crashloop_pods=3, permanent_failure_pods=3)
     assert should_fail_early(signals) is True
 
-    signals = PodFailureSignals(total_pods=5, crashloop_pods=1)
+    # One crashloop is still a permanent failure
+    signals = PodFailureSignals(total_pods=5, crashloop_pods=1, permanent_failure_pods=1)
+    assert should_fail_early(signals) is True
+
+
+def test_should_fail_early_transient_vs_permanent():
+    """Test that transient failures don't trigger early failure."""
+    # Transient-only failures (image pull, may be QPS rate limit) - should NOT fail early
+    signals = PodFailureSignals(
+        total_pods=5,
+        image_pull_pods=3,
+        transient_failure_pods=3,
+        permanent_failure_pods=0,
+    )
+    assert signals.has_only_transient_failures is True
     assert should_fail_early(signals) is False
+    
+    # QPS exceeded pattern - definitely transient
+    signals = PodFailureSignals(
+        total_pods=5,
+        image_pull_pods=3,
+        transient_failure_pods=3,
+        qps_exceeded_pods=3,
+        permanent_failure_pods=0,
+    )
+    assert signals.is_likely_qps_issue is True
+    assert should_fail_early(signals) is False
+    
+    # Mixed transient + permanent - should fail early due to permanent
+    signals = PodFailureSignals(
+        total_pods=5,
+        image_pull_pods=2,
+        config_error_pods=1,
+        transient_failure_pods=2,
+        permanent_failure_pods=1,
+    )
+    assert signals.has_only_transient_failures is False
+    assert should_fail_early(signals) is True
+
+
+def test_should_fail_early_combined_failures():
+    """Test that different permanent failure types trigger early failure."""
+    # Config error is permanent - should fail early
+    signals = PodFailureSignals(
+        total_pods=5,
+        config_error_pods=1,
+        permanent_failure_pods=1,
+    )
+    assert should_fail_early(signals) is True
+    
+    # Unschedulable is permanent - should fail early  
+    signals = PodFailureSignals(
+        total_pods=5,
+        unschedulable_pods=2,
+        permanent_failure_pods=2,
+    )
+    assert should_fail_early(signals) is True
+    
+    # Container error is permanent - should fail early
+    signals = PodFailureSignals(
+        total_pods=5,
+        container_error_pods=1,
+        permanent_failure_pods=1,
+    )
+    assert should_fail_early(signals) is True
 
 
 def test_handle_deployment_event_with_watch_all_namespaces():

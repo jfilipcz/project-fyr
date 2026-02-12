@@ -357,9 +357,11 @@ class NamespaceAnalyzer:
             
             # Use the agent's invoke method with proper message format for full tool access
             if hasattr(self.investigator, '_agent') and self.investigator._agent:
+                from .agent import ToolMetricsCallback
                 logger.info(f"Starting agentic investigation of namespace {namespace}")
                 result = self.investigator._agent.invoke(
-                    {"messages": [{"role": "user", "content": investigation_request}]}
+                    {"messages": [{"role": "user", "content": investigation_request}]},
+                    config={"callbacks": [ToolMetricsCallback()]}
                 )
                 
                 # Extract the final analysis from messages

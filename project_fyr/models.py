@@ -17,9 +17,21 @@ class RolloutStatus(str, Enum):
 
 
 class AnalysisStatus(str, Enum):
+    """Status of rollout analysis.
+    
+    NOT_NEEDED: Rollout doesn't require analysis (e.g., successful deployments)
+    PENDING: Waiting for analysis (rollout confirmed failed)
+    SPECULATIVE: Analysis started speculatively (rollout still in progress)
+    DONE: Analysis completed successfully
+    FAILED: Analysis failed (error during processing)
+    DISCARDED: Speculative analysis discarded (rollout succeeded)
+    """
+    NOT_NEEDED = "NOT_NEEDED"
     PENDING = "PENDING"
+    SPECULATIVE = "SPECULATIVE"
     DONE = "DONE"
     FAILED = "FAILED"
+    DISCARDED = "DISCARDED"
 
 
 class NotifyStatus(str, Enum):

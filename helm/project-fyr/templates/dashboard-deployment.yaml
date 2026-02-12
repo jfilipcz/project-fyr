@@ -37,12 +37,20 @@ spec:
                 name: {{ include "project-fyr.fullname" . }}
             - secretRef:
                 name: project-fyr-secrets
+            - secretRef:
+                name: fyr-slack-secrets
             {{- if .Values.secrets.existingSecret }}
             - secretRef:
                 name: {{ .Values.secrets.existingSecret }}
             {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
           resources:
             {{- toYaml .Values.dashboard.resources | nindent 12 }}
+      volumes:
+        - name: data
+          emptyDir: {}
       {{- with .Values.dashboard.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

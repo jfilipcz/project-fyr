@@ -1,3 +1,5 @@
+# Local deployment instructions (do not commit)
+DEPLOYMENT-LOCAL.md
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -211,3 +213,6 @@ __marimo__/
 *-openai-api.key
 run_local_azure.sh
 slack_messages.log
+
+# Agent notes (for AI assistants only)
+agents.md

@@ -49,7 +49,7 @@ def register_commands(app: App) -> None:
             elif subcommand == "namespace" or subcommand == "ns":
                 handle_namespace(respond, args)
             elif subcommand == "investigate":
-                handle_investigate(respond, client, channel_id, args)
+                handle_investigate(respond, client, channel_id, user_id, args)
             elif subcommand == "recent":
                 handle_recent(respond)
             else:
@@ -201,7 +201,7 @@ def handle_namespace(respond, args: list) -> None:
         respond(blocks=build_error_response(f"Failed to get namespace info: {str(e)}"))
 
 
-def handle_investigate(respond, client, channel_id: str, args: list) -> None:
+def handle_investigate(respond, client, channel_id: str, user_id: str, args: list) -> None:
     """Handle /fyr investigate <ns> <deployment> command."""
     if len(args) < 1:
         respond(blocks=build_error_response(
@@ -259,29 +259,82 @@ def handle_investigate(respond, client, channel_id: str, args: list) -> None:
             
             # Convert dict result to Analysis-like object
             from .models import Analysis
+            
+            # Extract AI analysis text or create summary from data
+            ai_text = result.get("analysis", "")
+            summary_data = result.get("summary", {})
+            
+            # Create a text summary
+            if isinstance(summary_data, dict):
+                summary_parts = [
+                    f"Namespace: {summary_data.get('namespace', namespace)}",
+                    f"Deployments: {summary_data.get('failing_deployments', 0)}/{summary_data.get('total_deployments', 0)} failing",
+                    f"Pods: {summary_data.get('unhealthy_pods', 0)}/{summary_data.get('total_pods', 0)} unhealthy",
+                ]
+                summary_text = "\n".join(summary_parts)
+            else:
+                summary_text = str(summary_data)
+            
+            # Parse AI analysis if it's a structured response
+            if isinstance(ai_text, dict):
+                likely_cause = ai_text.get("root_cause", "Analysis completed")
+                recommended_steps = ai_text.get("recommendations", ["Check the namespace status"])
+                severity = ai_text.get("severity", "medium")
+            elif ai_text:
+                # AI analysis is plain text
+                likely_cause = "See details below"
+                recommended_steps = [ai_text]
+                severity = "medium"
+            else:
+                likely_cause = "No issues detected" if not summary_data.get('has_issues') else "Issues detected"
+                recommended_steps = ["Review namespace status"]
+                severity = "low" if not summary_data.get('has_issues') else "medium"
+            
             analysis = Analysis(
-                summary=result.get("summary", ""),
-                likely_cause=result.get("likely_cause", ""),
-                recommended_steps=result.get("recommended_steps", []),
-                severity=result.get("severity", "medium"),
+                summary=summary_text,
+                likely_cause=likely_cause,
+                recommended_steps=recommended_steps,
+                severity=severity,
             )
         
-        # Post results
-        client.chat_postMessage(
-            channel=channel_id,
-            blocks=build_investigation_result_response(
-                namespace=namespace,
-                deployment=deployment,
-                analysis=analysis,
+        # Post results - open DM with user and send there
+        try:
+            # Try to use the channel if it's valid, otherwise DM the user
+            dm_response = client.conversations_open(users=[user_id])
+            dm_channel = dm_response["channel"]["id"]
+            
+            client.chat_postMessage(
+                channel=dm_channel,
+                blocks=build_investigation_result_response(
+                    namespace=namespace,
+                    deployment=deployment,
+                    analysis=analysis,
+                )
             )
-        )
+        except Exception as post_err:
+            logger.error(f"Failed to post to DM, trying channel: {post_err}")
+            # Fallback: try original channel
+            client.chat_postMessage(
+                channel=channel_id,
+                blocks=build_investigation_result_response(
+                    namespace=namespace,
+                    deployment=deployment,
+                    analysis=analysis,
+                )
+            )
         
     except Exception as e:
         logger.exception(f"Error in handle_investigate: {e}")
-        client.chat_postMessage(
-            channel=channel_id,
-            blocks=build_error_response(f"Investigation failed: {str(e)}")
-        )
+        try:
+            dm_response = client.conversations_open(users=[user_id])
+            dm_channel = dm_response["channel"]["id"]
+            client.chat_postMessage(
+                channel=dm_channel,
+                blocks=build_error_response(f"Investigation failed: {str(e)}")
+            )
+        except:
+            # Last resort - use respond
+            respond(blocks=build_error_response(f"Investigation failed: {str(e)}"))
 
 
 def handle_recent(respond) -> None:
@@ -331,7 +384,8 @@ def handle_recent(respond) -> None:
                         "emoji": True
                     },
                     "url": f"{settings.dashboard_base_url or 'http://localhost:8000'}/rollout/{f.id}",
-                    "action_id": f"view_rollout_{f.id}"
+                    "action_id": "view_rollout",
+                    "value": str(f.id),
                 }
             })
         

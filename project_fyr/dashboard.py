@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, Depends, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -81,13 +81,16 @@ if settings.auth_enabled:
         else:
             logger.warning(f"Unknown SSO provider: {settings.sso_provider}")
     
-    # Setup local auth provider if configured
-    if settings.auth_mode in ["local", "hybrid"] and settings.local_auth_enabled:
+    # Setup local auth provider - ALWAYS needed for session token validation
+    # Even in SSO mode, we need local provider to validate session tokens created after SSO login
+    if settings.local_auth_enabled:
         local_provider = LocalAuthProvider(
             jwt_secret=settings.local_auth_jwt_secret,
             jwt_expiry_hours=settings.local_auth_jwt_expiry_hours
         )
-        logger.info("Local authentication enabled")
+        logger.info("Local authentication provider enabled for session token validation")
+    else:
+        logger.warning("Local auth disabled - session tokens will not work!")
     
     # Parse excluded paths
     exclude_paths = [p.strip() for p in settings.auth_exclude_paths.split(",")]
@@ -114,6 +117,9 @@ app.include_router(webhook_router)
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+# Mount static files for favicon and assets
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
 # Dependency
 def get_repo() -> Iterator[RolloutRepo]:
     engine = init_db(settings.database_url)
@@ -128,7 +134,6 @@ async def login_page(request: Request):
     """Render login page."""
     if not settings.auth_enabled:
         # If auth is disabled, redirect to home
-        from fastapi.responses import RedirectResponse
         return RedirectResponse(url="/")
     
     return templates.TemplateResponse("login.html", {
@@ -149,32 +154,52 @@ async def index(request: Request, hours: int = 24, repo: RolloutRepo = Depends(g
     return templates.TemplateResponse("overview.html", {
         "request": request,
         "stats": stats,
-        "hours": hours
+        "hours": hours,
+        "show_ai_summary": settings.overview_show_ai_summary,
+        "active_nav": "overview",
     })
 
 @app.get("/rollouts", response_class=HTMLResponse)
-async def rollouts_list(request: Request, status: str = None, namespace: str = None):
+async def rollouts_list(request: Request, status: str = None, namespace: str = None, requestor: str = None):
     """Render rollouts page immediately without blocking on data."""
     return templates.TemplateResponse("index.html", {
         "request": request,
         "current_status": status,
-        "current_namespace": namespace
+        "current_namespace": namespace,
+        "current_requestor": requestor,
+        "active_nav": "rollouts",
     })
 
 @app.get("/api/rollouts")
-async def get_rollouts_data(status: str = None, namespace: str = None, include_system: bool = False, repo: RolloutRepo = Depends(get_repo)):
-    """API endpoint to fetch rollouts data asynchronously."""
+async def get_rollouts_data(
+    status: str = None,
+    namespace: str = None,
+    requestor: str = None,
+    include_system: bool = False,
+    offset: int = 0,
+    limit: int = 50,
+    repo: RolloutRepo = Depends(get_repo),
+):
+    """API endpoint to fetch rollouts data asynchronously with pagination."""
     exclude_system = not include_system
+    # Clamp limit
+    limit = min(limit, 200)
+    
+    # Get total count first
+    total = repo.count_rollouts(
+        status=status, namespace=namespace, requestor=requestor,
+        exclude_system=exclude_system,
+    )
     
     # Filter by status and/or namespace if provided
     if status and namespace:
-        rollouts = repo.list_by_status_and_namespace(status, namespace, limit=50)
+        rollouts = repo.list_by_status_and_namespace(status, namespace, limit=limit, requestor=requestor, offset=offset)
     elif status:
-        rollouts = repo.list_by_status(status, limit=50, exclude_system=exclude_system)
+        rollouts = repo.list_by_status(status, limit=limit, exclude_system=exclude_system, requestor=requestor, offset=offset)
     elif namespace:
-        rollouts = repo.list_by_namespace(namespace, limit=50)
+        rollouts = repo.list_by_namespace(namespace, limit=limit, requestor=requestor, offset=offset)
     else:
-        rollouts = repo.list_recent(limit=50, exclude_system=exclude_system)
+        rollouts = repo.list_recent(limit=limit, exclude_system=exclude_system, requestor=requestor, offset=offset)
     
     return {
         "rollouts": [
@@ -189,7 +214,10 @@ async def get_rollouts_data(status: str = None, namespace: str = None, include_s
             }
             for r in rollouts
         ],
-        "count": len(rollouts)
+        "total": total,
+        "count": len(rollouts),
+        "offset": offset,
+        "limit": limit,
     }
 
 @app.get("/rollout/{rollout_id}", response_class=HTMLResponse)
@@ -212,7 +240,7 @@ async def detail(request: Request, rollout_id: int, repo: RolloutRepo = Depends(
             # analysis is stored as a dict, Jinja2 can access it
             analysis_data = record.analysis
 
-    return templates.TemplateResponse("detail.html", {"request": request, "rollout": rollout, "analysis": analysis_data})
+    return templates.TemplateResponse("detail.html", {"request": request, "rollout": rollout, "analysis": analysis_data, "active_nav": "rollouts"})
 
 @app.post("/api/investigate")
 async def investigate(request: Request):
@@ -242,7 +270,12 @@ async def investigate(request: Request):
 @app.get("/investigate", response_class=HTMLResponse)
 async def investigate_page(request: Request):
     """Render investigate page immediately without blocking on k8s queries."""
-    return templates.TemplateResponse("investigate.html", {"request": request})
+    return templates.TemplateResponse("investigate.html", {"request": request, "active_nav": "investigate"})
+
+@app.get("/ondemand")
+async def ondemand_redirect():
+    """Redirect legacy /ondemand route to /investigate."""
+    return RedirectResponse(url="/investigate", status_code=301)
 
 @app.get("/api/investigate/deployments")
 async def get_deployments_data(include_system: bool = False):
@@ -493,7 +526,7 @@ async def alerts_index(request: Request, repo: AlertRepo = Depends(get_alert_rep
     with repo.session() as s:
         batches = s.scalars(stmt).all()
         
-    return templates.TemplateResponse("alerts.html", {"request": request, "batches": batches})
+    return templates.TemplateResponse("alerts.html", {"request": request, "batches": batches, "active_nav": "alerts"})
 
 @app.get("/alerts/{batch_id}", response_class=HTMLResponse)
 async def alert_detail(request: Request, batch_id: int, repo: AlertRepo = Depends(get_alert_repo)):
@@ -516,7 +549,8 @@ async def alert_detail(request: Request, batch_id: int, repo: AlertRepo = Depend
         "request": request, 
         "batch": batch, 
         "alerts": alerts,
-        "job": job
+        "job": job,
+        "active_nav": "alerts",
     })
 
 
@@ -529,7 +563,8 @@ async def overview_legacy(request: Request, hours: int = 24, include_system: boo
     return templates.TemplateResponse("overview.html", {
         "request": request,
         "stats": stats,
-        "hours": hours
+        "hours": hours,
+        "active_nav": "overview",
     })
 
 
@@ -578,4 +613,3 @@ async def get_overview_insights(hours: int = 24, include_system: bool = False, r
     logger.info(f"Cached new insights for {hours}h window")
     
     return result
-

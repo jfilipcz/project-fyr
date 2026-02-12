@@ -1,0 +1,57 @@
+{
+  "display_information": {
+    "name": "Fyr",
+    "description": "Kubernetes Rollout Intelligence - AI-powered deployment monitoring and investigation",
+    "background_color": "#FF6B35",
+    "long_description": "Fyr monitors Kubernetes deployments and provides AI-powered analysis of failures. Get instant notifications, run investigations with slash commands, and chat with AI about cluster issues."
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": true,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "Fyr",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/fyr",
+        "description": "Kubernetes cluster intelligence and investigation",
+        "usage_hint": "[status|namespace <ns>|investigate <ns> [deploy]|recent|help]",
+        "should_escape": false
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "chat:write.public",
+        "commands",
+        "im:write",
+        "im:history",
+        "app_mentions:read",
+        "users:read",
+        "users:read.email",
+        "files:write"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "app_home_opened",
+        "app_mention",
+        "message.im"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true
+    },
+    "org_deploy_enabled": true,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}

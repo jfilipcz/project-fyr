@@ -1,781 +1,527 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "_base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Investigate - Project Fyr</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: #f4f4f9;
-            color: #333;
-        }
+{% block title %}Investigate - Project Fyr{% endblock %}
 
-        h1 {
-            margin-bottom: 20px;
-        }
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+    /* Markdown rendering for results and chat */
+    .md-content h1, .md-content h2, .md-content h3 { margin-top: 1em; margin-bottom: 0.5em; font-weight: 600; color: #1f2937; }
+    .md-content h1 { font-size: 1.4em; border-bottom: 2px solid #e5e7eb; padding-bottom: 0.3em; }
+    .md-content h2 { font-size: 1.2em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3em; }
+    .md-content h3 { font-size: 1.05em; }
+    .md-content p { margin: 0.6em 0; line-height: 1.7; }
+    .md-content ul, .md-content ol { margin: 0.6em 0; padding-left: 1.8em; }
+    .md-content li { margin: 0.3em 0; line-height: 1.6; }
+    .md-content code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 0.88em; color: #dc2626; }
+    .md-content pre { background: #1f2937; color: #f3f4f6; padding: 14px; border-radius: 6px; overflow-x: auto; margin: 1em 0; }
+    .md-content pre code { background: none; padding: 0; color: inherit; }
+    .md-content blockquote { border-left: 3px solid #6366f1; margin: 1em 0; padding: 0.5em 1em; background: #f9fafb; color: #4b5563; }
+    .md-content table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+    .md-content th, .md-content td { border: 1px solid #e5e7eb; padding: 8px 12px; text-align: left; }
+    .md-content th { background: #f3f4f6; font-weight: 600; }
+    .md-content tr:nth-child(even) { background: #f9fafb; }
+    .md-content a { color: #4f46e5; }
+    .md-content a:hover { text-decoration: underline; }
+    .md-content strong { font-weight: 600; }
+    .md-content hr { border: none; border-top: 1px solid #e5e7eb; margin: 1.5em 0; }
+</style>
+{% endblock %}
 
-        .container {
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-            max-width: 800px;
-            margin: 0 auto;
-        }
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <h2 class="text-2xl font-bold text-gray-900 mb-6">On-Demand Investigation</h2>
 
-        .form-group {
-            margin-bottom: 15px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: 600;
-        }
-
-        select,
-        input[type="text"],
-        button {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 16px;
-        }
-        
-        #namespaceInput {
-            background-color: white;
-        }
-        
-        #namespaceInput:disabled {
-            background-color: #e9ecef;
-            cursor: not-allowed;
-        }
-
-        button {
-            background-color: #007bff;
-            color: white;
-            border: none;
-            cursor: pointer;
-            font-weight: 600;
-            margin-top: 10px;
-        }
-
-        button:hover {
-            background-color: #0056b3;
-        }
-
-        button:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
-
-        #result {
-            margin-top: 20px;
-            padding: 15px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            background: #f8f9fa;
-            display: none;
-            white-space: pre-wrap;
-        }
-
-        .loading {
-            text-align: center;
-            display: none;
-            margin-top: 20px;
-        }
-
-        .nav {
-            margin-bottom: 20px;
-        }
-
-        .nav a {
-            margin-right: 15px;
-            text-decoration: none;
-            color: #007bff;
-        }
-
-        .banner {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 15px 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-weight: 500;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-        }
-
-        .banner.hidden {
-            display: none;
-        }
-
-        .spinner {
-            border: 3px solid rgba(255, 255, 255, 0.3);
-            border-radius: 50%;
-            border-top: 3px solid white;
-            width: 20px;
-            height: 20px;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .progress-container {
-            display: none;
-            margin-top: 20px;
-            margin-bottom: 20px;
-        }
-
-        .progress-bar {
-            width: 100%;
-            height: 30px;
-            background-color: #e9ecef;
-            border-radius: 15px;
-            overflow: hidden;
-            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #28a745 0%, #20c997 100%);
-            width: 0%;
-            transition: width 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: 600;
-            font-size: 14px;
-        }
-
-        .progress-text {
-            margin-top: 10px;
-            text-align: center;
-            color: #666;
-            font-size: 14px;
-        }
-
-        /* Markdown rendering styles */
-        #result {
-            white-space: normal;
-        }
-
-        #result h1, #result h2, #result h3 {
-            margin-top: 1.5em;
-            margin-bottom: 0.5em;
-            font-weight: 600;
-            color: #2c3e50;
-        }
-
-        #result h1 {
-            font-size: 1.8em;
-            border-bottom: 2px solid #3498db;
-            padding-bottom: 0.3em;
-        }
-
-        #result h2 {
-            font-size: 1.5em;
-            border-bottom: 1px solid #ecf0f1;
-            padding-bottom: 0.3em;
-        }
-
-        #result h3 {
-            font-size: 1.2em;
-        }
-
-        #result p {
-            margin: 0.8em 0;
-            line-height: 1.6;
-        }
-
-        #result ul, #result ol {
-            margin: 0.8em 0;
-            padding-left: 2em;
-        }
-
-        #result li {
-            margin: 0.4em 0;
-            line-height: 1.6;
-        }
-
-        #result code {
-            background: #f4f4f4;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9em;
-        }
-
-        #result pre {
-            background: #2d2d2d;
-            color: #f8f8f2;
-            padding: 15px;
-            border-radius: 5px;
-            overflow-x: auto;
-            margin: 1em 0;
-        }
-
-        #result pre code {
-            background: none;
-            padding: 0;
-            color: inherit;
-        }
-
-        #result blockquote {
-            border-left: 4px solid #3498db;
-            margin: 1em 0;
-            padding-left: 1em;
-            color: #555;
-            font-style: italic;
-        }
-
-        #result table {
-            border-collapse: collapse;
-            width: 100%;
-            margin: 1em 0;
-        }
-
-        #result th, #result td {
-            border: 1px solid #ddd;
-            padding: 8px 12px;
-            text-align: left;
-        }
-
-        #result th {
-            background: #3498db;
-            color: white;
-            font-weight: 600;
-        }
-
-        #result tr:nth-child(even) {
-            background: #f9f9f9;
-        }
-
-        #result strong {
-            font-weight: 600;
-            color: #2c3e50;
-        }
-
-        #result em {
-            font-style: italic;
-            color: #555;
-        }
-
-        #result hr {
-            border: none;
-            border-top: 2px solid #ecf0f1;
-            margin: 2em 0;
-        }
-
-        #result a {
-            color: #3498db;
-            text-decoration: none;
-        }
-
-        #result a:hover {
-            text-decoration: underline;
-        }
-
-        .markdown-body {
-            box-sizing: border-box;
-            min-width: 200px;
-            max-width: 980px;
-        }
-    </style>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-</head>
-
-<body>
-    <div class="nav">
-        <a href="/">← Back to Dashboard</a>
+    <!-- Loading banner for deployment data -->
+    <div id="loadingBanner" class="mb-6 bg-indigo-600 text-white px-5 py-3 rounded-lg shadow flex items-center gap-3">
+        <svg class="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <span class="text-sm font-medium">Loading deployment data from cluster...</span>
     </div>
-    
-    <div id="loadingBanner" class="banner">
-        <div class="spinner"></div>
-        <span>Loading deployment data from cluster...</span>
-    </div>
-    
-    <div class="container">
-        <h1>On-Demand Investigation</h1>
-        <div class="form-group">
-            <label for="namespaceInput">Namespace</label>
-            <input type="text" id="namespaceInput" list="namespaceList" placeholder="Type to search namespaces..." 
-                   oninput="updateDeploymentsFromInput()" disabled />
-            <datalist id="namespaceList"></datalist>
-        </div>
-        <div class="form-group">
-            <label>
-                <input type="checkbox" id="failingOnly" onchange="updateDeployments()"> Show only failing deployments
+
+    <!-- Investigation form -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+        <div class="space-y-4">
+            <!-- Namespace input -->
+            <div>
+                <label for="namespaceInput" class="block text-sm font-medium text-gray-700 mb-1">Namespace</label>
+                <input type="text" id="namespaceInput" list="namespaceList"
+                       placeholder="Type to search namespaces..."
+                       oninput="updateDeploymentsFromInput()" disabled
+                       class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm disabled:bg-gray-100 disabled:text-gray-500">
+                <datalist id="namespaceList"></datalist>
+            </div>
+
+            <!-- Failing only checkbox -->
+            <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input type="checkbox" id="failingOnly" onchange="updateDeployments()"
+                       class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                Show only failing deployments
             </label>
-        </div>
-        <div class="form-group">
-            <label for="deployment">Deployment</label>
-            <select id="deployment" disabled>
-                <option value="">Select Namespace First</option>
-            </select>
-        </div>
-        
-        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
-            <button id="investigateBtn" onclick="runInvestigation()" disabled style="flex: 1;" 
-                    title="Analyzes a specific deployment in detail, investigating pod issues, logs, events, and resource problems">
-                Analyze Deployment
-            </button>
-            <button id="analyzeNamespaceBtn" onclick="analyzeNamespace()" disabled style="flex: 1; background-color: #28a745;"
-                    title="Analyzes all resources in the namespace, providing an overview of deployments, pods, events, and AI-powered recommendations">
-                Analyze Namespace
-            </button>
-        </div>
 
-        <div id="loading" class="loading">
-            Investigating... This may take a minute.
-        </div>
-
-        <!-- Progress Bar for Namespace Analysis -->
-        <div id="progressContainer" class="progress-container">
-            <div class="progress-bar">
-                <div id="progressFill" class="progress-fill">0%</div>
+            <!-- Deployment select -->
+            <div>
+                <label for="deployment" class="block text-sm font-medium text-gray-700 mb-1">Deployment</label>
+                <select id="deployment" disabled
+                        class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm disabled:bg-gray-100 disabled:text-gray-500">
+                    <option value="">Select namespace first</option>
+                </select>
             </div>
-            <div id="progressText" class="progress-text">Initializing analysis...</div>
-        </div>
 
-        <div id="result"></div>
-        
-        <!-- Chat Interface -->
-        <div id="chatContainer" style="display: none; margin-top: 30px; border-top: 2px solid #ddd; padding-top: 20px;">
-            <h2>💬 Chat with SRE Agent</h2>
-            <div id="chatMessages" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 4px; padding: 15px; min-height: 300px; max-height: 500px; overflow-y: auto; margin-bottom: 15px;">
-                <div id="placeholderText" style="color: #666; font-style: italic;">Ask questions about the namespace or deployment issues...</div>
-            </div>
-            <div style="display: flex; gap: 10px;">
-                <input type="text" id="chatInput" placeholder="Ask a question..." 
-                       style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px;"
-                       onkeypress="if(event.key === 'Enter') sendChatMessage()">
-                <button onclick="sendChatMessage()" id="chatSendBtn" 
-                        style="width: auto; padding: 10px 20px; background-color: #007bff;">
-                    Send
+            <!-- Action buttons -->
+            <div class="flex gap-3 pt-2">
+                <button id="investigateBtn" onclick="runInvestigation()" disabled
+                        class="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                        title="Analyzes a specific deployment in detail">
+                    Analyze Deployment
+                </button>
+                <button id="analyzeNamespaceBtn" onclick="analyzeNamespace()" disabled
+                        class="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                        title="Analyzes all resources in the namespace">
+                    Analyze Namespace
                 </button>
             </div>
         </div>
     </div>
 
-    <script>
-        let deployments = {};
-        let statuses = {};
-        let chatHistory = [];
-        let currentNamespace = '';
-        let currentDeployment = '';
+    <!-- Indeterminate analysis progress -->
+    <div id="progressContainer" class="hidden mb-6">
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+            <div class="flex items-center gap-4">
+                <svg class="animate-spin h-8 w-8 text-indigo-600 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-gray-900" id="progressTitle">Analyzing...</p>
+                    <p class="text-xs text-gray-500 mt-0.5" id="progressText">Gathering deployment information...</p>
+                    <!-- Indeterminate progress bar -->
+                    <div class="mt-2 w-full bg-gray-200 rounded-full h-1 overflow-hidden">
+                        <div class="bg-indigo-600 h-1 rounded-full animate-pulse" style="width: 100%"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-        // Load deployment data on page load
-        async function loadDeploymentData() {
-            const banner = document.getElementById('loadingBanner');
-            const nsInput = document.getElementById('namespaceInput');
-            const nsDatalist = document.getElementById('namespaceList');
-            
-            try {
-                const response = await fetch('/api/investigate/deployments');
-                if (!response.ok) {
-                    throw new Error(`Failed to load: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
+    <!-- Results -->
+    <div id="result" class="hidden mb-6">
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+                <h3 class="text-lg font-semibold text-gray-900">Investigation Results</h3>
+                <span id="resultTimestamp" class="text-xs text-gray-400"></span>
+            </div>
+            <div class="p-5 md-content" id="resultContent"></div>
+        </div>
+    </div>
+
+    <!-- Chat Interface -->
+    <div id="chatContainer" class="hidden">
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <div class="px-5 py-4 border-b border-gray-200">
+                <h3 class="text-lg font-semibold text-gray-900">Chat with SRE Agent</h3>
+                <p class="text-xs text-gray-500 mt-0.5">Ask follow-up questions about the investigation above. The agent has access to your cluster.</p>
+            </div>
+
+            <!-- Messages -->
+            <div id="chatMessages" class="px-5 py-4 min-h-48 max-h-96 overflow-y-auto space-y-4 bg-gray-50">
+                <!-- Suggested questions will appear here -->
+                <div id="suggestedQuestions" class="space-y-2">
+                    <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Suggested questions</p>
+                    <div class="flex flex-wrap gap-2">
+                        <button onclick="askSuggested(this)" class="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded-full text-gray-700 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 transition-colors">
+                            Show me the pod logs
+                        </button>
+                        <button onclick="askSuggested(this)" class="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded-full text-gray-700 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 transition-colors">
+                            What events happened recently?
+                        </button>
+                        <button onclick="askSuggested(this)" class="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded-full text-gray-700 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 transition-colors">
+                            Are there resource limits issues?
+                        </button>
+                        <button onclick="askSuggested(this)" class="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded-full text-gray-700 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-700 transition-colors">
+                            Check network policies
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat input -->
+            <div class="px-5 py-3 border-t border-gray-200 flex gap-2">
+                <input type="text" id="chatInput" placeholder="Ask a question..."
+                       class="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                       onkeypress="if(event.key === 'Enter') sendChatMessage()">
+                <button onclick="sendChatMessage()" id="chatSendBtn"
+                        class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    var deployments = {};
+    var statuses = {};
+    var chatHistory = [];
+    var currentNamespace = '';
+    var currentDeployment = '';
+
+    // Analysis step descriptions for indeterminate spinner
+    var analysisSteps = [
+        'Gathering deployment information...',
+        'Checking pod health status...',
+        'Collecting events and logs...',
+        'AI agent investigating issues...',
+        'Analyzing patterns and root causes...',
+        'Generating recommendations...'
+    ];
+
+    // Load deployment data on page load
+    function loadDeploymentData() {
+        var banner = document.getElementById('loadingBanner');
+        var nsInput = document.getElementById('namespaceInput');
+        var nsDatalist = document.getElementById('namespaceList');
+
+        fetch('/api/investigate/deployments')
+            .then(function(r) {
+                if (!r.ok) throw new Error(r.statusText);
+                return r.json();
+            })
+            .then(function(data) {
                 deployments = data.deployments;
                 statuses = data.deployment_statuses;
-                
-                // Populate namespace datalist
                 nsDatalist.innerHTML = '';
-                data.namespaces.forEach(ns => {
-                    const option = document.createElement('option');
-                    option.value = ns;
-                    nsDatalist.appendChild(option);
+                data.namespaces.forEach(function(ns) {
+                    var opt = document.createElement('option');
+                    opt.value = ns;
+                    nsDatalist.appendChild(opt);
                 });
                 nsInput.disabled = false;
                 nsInput.placeholder = 'Type to search namespaces...';
-                
-                // Hide banner
                 banner.classList.add('hidden');
-                
-            } catch (e) {
-                banner.style.background = '#dc3545';
-                banner.innerHTML = `<span>⚠️ Failed to load deployment data: ${e.message}</span>`;
+                showToast('Deployment data loaded', 'success');
+            })
+            .catch(function(err) {
+                banner.className = 'mb-6 bg-red-600 text-white px-5 py-3 rounded-lg shadow flex items-center gap-3';
+                banner.innerHTML = '<span class="text-sm font-medium">Failed to load deployment data: ' + err.message + '. <button onclick="loadDeploymentData()" class="underline ml-1">Retry</button></span>';
+            });
+    }
+
+    window.addEventListener('DOMContentLoaded', loadDeploymentData);
+
+    function updateDeploymentsFromInput() {
+        var ns = document.getElementById('namespaceInput').value;
+        var options = Array.from(document.getElementById('namespaceList').options);
+        if (options.some(function(o) { return o.value === ns; })) {
+            updateDeployments(ns);
+        } else {
+            var depSelect = document.getElementById('deployment');
+            depSelect.innerHTML = '<option value="">Select valid namespace first</option>';
+            depSelect.disabled = true;
+            document.getElementById('investigateBtn').disabled = true;
+            document.getElementById('analyzeNamespaceBtn').disabled = true;
+        }
+    }
+
+    function updateDeployments(namespace) {
+        var ns = namespace || document.getElementById('namespaceInput').value;
+        var depSelect = document.getElementById('deployment');
+        var failingOnly = document.getElementById('failingOnly').checked;
+        var investigateBtn = document.getElementById('investigateBtn');
+        var analyzeBtn = document.getElementById('analyzeNamespaceBtn');
+
+        depSelect.innerHTML = '<option value="">Select Deployment</option>';
+        depSelect.disabled = !ns;
+        investigateBtn.disabled = true;
+        analyzeBtn.disabled = !ns;
+
+        if (ns && deployments[ns]) {
+            var filtered = deployments[ns];
+            if (failingOnly) {
+                filtered = filtered.filter(function(dep) {
+                    var key = ns + '/' + dep;
+                    return statuses[key] && statuses[key].failing;
+                });
+            }
+            filtered.forEach(function(dep) {
+                var opt = document.createElement('option');
+                opt.value = dep;
+                var key = ns + '/' + dep;
+                var status = statuses[key];
+                var text = dep;
+                if (status) text += ' (' + status.ready + '/' + status.desired + ')';
+                if (status && status.failing) text += ' ⚠️';
+                opt.textContent = text;
+                depSelect.appendChild(opt);
+            });
+            if (filtered.length === 0) {
+                depSelect.innerHTML = '<option value="">No deployments found</option>';
             }
         }
+    }
 
-        // Load data when page loads
-        window.addEventListener('DOMContentLoaded', loadDeploymentData);
-        
-        function updateDeploymentsFromInput() {
-            const nsInput = document.getElementById('namespaceInput');
-            const ns = nsInput.value;
-            
-            // Check if the entered value is a valid namespace
-            const dataList = document.getElementById('namespaceList');
-            const options = Array.from(dataList.options);
-            const isValid = options.some(opt => opt.value === ns);
-            
-            if (isValid) {
-                updateDeployments(ns);
-            } else {
-                // Clear deployment dropdown if invalid namespace
-                const depSelect = document.getElementById('deployment');
-                const btn = document.getElementById('investigateBtn');
-                const analyzeBtn = document.getElementById('analyzeNamespaceBtn');
-                
-                depSelect.innerHTML = '<option value="">Select valid namespace first</option>';
-                depSelect.disabled = true;
-                btn.disabled = true;
-                analyzeBtn.disabled = true;
-            }
+    document.getElementById('deployment').addEventListener('change', function() {
+        document.getElementById('investigateBtn').disabled = !this.value;
+    });
+
+    function showProgress(title) {
+        var container = document.getElementById('progressContainer');
+        var titleEl = document.getElementById('progressTitle');
+        var textEl = document.getElementById('progressText');
+        container.classList.remove('hidden');
+        titleEl.textContent = title || 'Analyzing...';
+        var stepIndex = 0;
+        textEl.textContent = analysisSteps[0];
+        window._progressInterval = setInterval(function() {
+            stepIndex = (stepIndex + 1) % analysisSteps.length;
+            textEl.textContent = analysisSteps[stepIndex];
+        }, 4000);
+    }
+
+    function hideProgress() {
+        document.getElementById('progressContainer').classList.add('hidden');
+        if (window._progressInterval) {
+            clearInterval(window._progressInterval);
+            window._progressInterval = null;
         }
+    }
 
-        function updateDeployments(namespace) {
-            const nsInput = document.getElementById('namespaceInput');
-            const depSelect = document.getElementById('deployment');
-            const failingOnlyCheckbox = document.getElementById('failingOnly');
-            const btn = document.getElementById('investigateBtn');
-            const analyzeBtn = document.getElementById('analyzeNamespaceBtn');
-            const ns = namespace || nsInput.value;
-            const failingOnly = failingOnlyCheckbox.checked;
+    function runInvestigation() {
+        var ns = document.getElementById('namespaceInput').value;
+        var dep = document.getElementById('deployment').value;
+        if (!ns || !dep) return;
 
-            depSelect.innerHTML = '<option value="">Select Deployment</option>';
-            depSelect.disabled = !ns;
-            btn.disabled = true;
-            analyzeBtn.disabled = !ns;  // Enable namespace analysis when namespace is selected
+        var btn = document.getElementById('investigateBtn');
+        var resultDiv = document.getElementById('result');
+        var resultContent = document.getElementById('resultContent');
 
-            if (ns && deployments[ns]) {
-                let filteredDeployments = deployments[ns];
-                
-                if (failingOnly) {
-                    filteredDeployments = filteredDeployments.filter(dep => {
-                        const statusKey = `${ns}/${dep}`;
-                        return statuses[statusKey] && statuses[statusKey].failing;
+        btn.disabled = true;
+        resultDiv.classList.add('hidden');
+        showProgress('Analyzing deployment ' + dep + '...');
+
+        fetch('/api/investigate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ namespace: ns, deployment: dep })
+        })
+        .then(function(r) {
+            if (!r.ok) throw new Error(r.statusText);
+            return r.json();
+        })
+        .then(function(data) {
+            hideProgress();
+
+            var output = '## Summary\n\n' + data.summary + '\n\n';
+            output += '## Likely Cause\n\n' + data.likely_cause + '\n\n';
+            output += '## Severity\n\n' + data.severity + '\n\n';
+            output += '## Recommended Steps\n\n' + data.recommended_steps.map(function(s) { return '- ' + s; }).join('\n');
+
+            resultContent.innerHTML = marked.parse(output);
+            resultDiv.classList.remove('hidden');
+            document.getElementById('resultTimestamp').textContent = 'Generated ' + new Date().toLocaleTimeString();
+
+            // Enable chat
+            document.getElementById('chatContainer').classList.remove('hidden');
+            currentNamespace = ns;
+            currentDeployment = dep;
+            chatHistory = [];
+            showToast('Investigation complete', 'success');
+        })
+        .catch(function(err) {
+            hideProgress();
+            resultContent.innerHTML = '<div class="text-red-600"><p class="font-medium">Investigation failed</p><p class="text-sm mt-1">' + err.message + '</p><button onclick="runInvestigation()" class="mt-2 text-sm underline">Retry</button></div>';
+            resultDiv.classList.remove('hidden');
+            showToast('Investigation failed', 'error');
+        })
+        .finally(function() {
+            btn.disabled = false;
+        });
+    }
+
+    function analyzeNamespace() {
+        var ns = document.getElementById('namespaceInput').value;
+        if (!ns) return;
+
+        var btn = document.getElementById('analyzeNamespaceBtn');
+        var resultDiv = document.getElementById('result');
+        var resultContent = document.getElementById('resultContent');
+
+        btn.disabled = true;
+        resultDiv.classList.add('hidden');
+        showProgress('Analyzing namespace ' + ns + '...');
+
+        fetch('/api/investigate/namespace/' + encodeURIComponent(ns), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        })
+        .then(function(r) {
+            if (!r.ok) throw new Error(r.statusText);
+            return r.json();
+        })
+        .then(function(data) {
+            hideProgress();
+
+            var output = '# Namespace Analysis\n\n';
+            output += '**Namespace:** ' + data.summary.namespace + '\n\n';
+            output += '**Total Deployments:** ' + data.summary.total_deployments + '\n\n';
+            output += '**Failing Deployments:** ' + data.summary.failing_deployments + '\n\n';
+            output += '**Total Pods:** ' + data.summary.total_pods + '\n\n';
+            output += '**Unhealthy Pods:** ' + data.summary.unhealthy_pods + '\n\n';
+
+            if (data.deployments) {
+                var failing = data.deployments.filter(function(d) { return !d.healthy; });
+                if (failing.length > 0) {
+                    output += '## Failing Deployments\n\n';
+                    failing.forEach(function(dep) {
+                        output += '### ' + dep.name + '\n\n';
+                        output += '- **Status:** ' + dep.ready_replicas + '/' + dep.desired_replicas + ' replicas ready\n';
+                        if (dep.conditions) {
+                            dep.conditions.forEach(function(c) {
+                                if (c.status !== 'True') output += '- **' + c.type + ':** ' + c.message + '\n';
+                            });
+                        }
+                        output += '\n';
                     });
                 }
-                
-                filteredDeployments.forEach(dep => {
-                    const option = document.createElement('option');
-                    option.value = dep;
-                    const statusKey = `${ns}/${dep}`;
-                    const status = statuses[statusKey];
-                    const statusText = status ? ` (${status.ready}/${status.desired})` : '';
-                    const failingIndicator = (status && status.failing) ? ' ⚠️' : '';
-                    option.textContent = dep + statusText + failingIndicator;
-                    depSelect.appendChild(option);
-                });
-                
-                if (filteredDeployments.length === 0) {
-                    depSelect.innerHTML = '<option value="">No deployments found</option>';
+            }
+
+            if (data.pods) {
+                var unhealthy = data.pods.filter(function(p) { return !p.healthy; });
+                if (unhealthy.length > 0) {
+                    output += '## Unhealthy Pods\n\n';
+                    unhealthy.forEach(function(pod) {
+                        output += '### ' + pod.name + '\n\n- **Phase:** ' + pod.phase + '\n';
+                        if (pod.issues) pod.issues.forEach(function(i) { output += '- ' + i + '\n'; });
+                        output += '\n';
+                    });
                 }
             }
-        }
 
-        document.getElementById('deployment').addEventListener('change', function () {
-            document.getElementById('investigateBtn').disabled = !this.value;
+            if (data.events) {
+                var warnings = data.events.filter(function(e) { return e.type === 'Warning' || e.type === 'Error'; });
+                if (warnings.length > 0) {
+                    output += '## Recent Warnings/Errors\n\n';
+                    warnings.slice(0, 10).forEach(function(ev) {
+                        output += '### ' + ev.type + ': ' + ev.reason + '\n\n';
+                        output += '- **Object:** ' + ev.object + '\n- **Message:** ' + ev.message + '\n\n';
+                    });
+                }
+            }
+
+            if (data.analysis) {
+                output += '## AI Analysis & Recommendations\n\n' + data.analysis;
+            } else if (!data.summary.has_issues) {
+                output += '## Status\n\n✅ No issues detected. All deployments and pods are healthy!';
+            }
+
+            resultContent.innerHTML = marked.parse(output);
+            resultDiv.classList.remove('hidden');
+            document.getElementById('resultTimestamp').textContent = 'Generated ' + new Date().toLocaleTimeString();
+
+            document.getElementById('chatContainer').classList.remove('hidden');
+            currentNamespace = ns;
+            chatHistory = [];
+            showToast('Namespace analysis complete', 'success');
+        })
+        .catch(function(err) {
+            hideProgress();
+            resultContent.innerHTML = '<div class="text-red-600"><p class="font-medium">Namespace analysis failed</p><p class="text-sm mt-1">' + err.message + '</p><button onclick="analyzeNamespace()" class="mt-2 text-sm underline">Retry</button></div>';
+            resultDiv.classList.remove('hidden');
+            showToast('Analysis failed', 'error');
+        })
+        .finally(function() {
+            btn.disabled = false;
         });
+    }
 
-        async function runInvestigation() {
-            const ns = document.getElementById('namespaceInput').value;
-            const dep = document.getElementById('deployment').value;
-            const btn = document.getElementById('investigateBtn');
-            const loading = document.getElementById('loading');
-            const resultDiv = document.getElementById('result');
+    function askSuggested(btn) {
+        document.getElementById('chatInput').value = btn.textContent.trim();
+        document.getElementById('suggestedQuestions').remove();
+        sendChatMessage();
+    }
 
-            if (!ns || !dep) return;
+    function sendChatMessage() {
+        var input = document.getElementById('chatInput');
+        var messagesDiv = document.getElementById('chatMessages');
+        var sendBtn = document.getElementById('chatSendBtn');
+        var userMessage = input.value.trim();
+        if (!userMessage) return;
 
-            btn.disabled = true;
-            loading.style.display = 'block';
-            resultDiv.style.display = 'none';
-            resultDiv.textContent = '';
+        // Remove suggested questions
+        var sq = document.getElementById('suggestedQuestions');
+        if (sq) sq.remove();
 
-            try {
-                const response = await fetch('/api/investigate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ namespace: ns, deployment: dep })
-                });
+        chatHistory.push({ role: 'user', content: userMessage });
 
-                if (!response.ok) {
-                    throw new Error(`Error: ${response.statusText}`);
-                }
+        // User bubble
+        var userDiv = document.createElement('div');
+        userDiv.className = 'flex justify-end';
+        userDiv.innerHTML = '<div class="max-w-xs sm:max-w-md px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm">' + escapeHtml(userMessage) + '</div>';
+        messagesDiv.appendChild(userDiv);
 
-                const data = await response.json();
+        input.value = '';
+        input.disabled = true;
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Thinking...';
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
-                let output = `## Summary\n\n${data.summary}\n\n`;
-                output += `## Likely Cause\n\n${data.likely_cause}\n\n`;
-                output += `## Severity\n\n${data.severity}\n\n`;
-                output += `## Recommended Steps\n\n${data.recommended_steps.map(s => '- ' + s).join('\n')}`;
+        // Typing indicator
+        var typingDiv = document.createElement('div');
+        typingDiv.id = 'typingIndicator';
+        typingDiv.className = 'flex justify-start';
+        typingDiv.innerHTML = '<div class="px-4 py-2 rounded-lg bg-white border border-gray-200 text-sm text-gray-500 flex items-center gap-2"><svg class="animate-spin h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Thinking...</div>';
+        messagesDiv.appendChild(typingDiv);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
-                // Render Markdown to HTML
-                resultDiv.innerHTML = marked.parse(output);
-                resultDiv.style.display = 'block';
-                resultDiv.style.color = ''; // Reset color
-                
-                // Enable chat after successful investigation
-                document.getElementById('chatContainer').style.display = 'block';
-                currentNamespace = ns;
-                currentDeployment = dep;
-                chatHistory = []; // Reset chat history for new investigation
+        fetch('/api/investigate/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                namespace: currentNamespace,
+                deployment: currentDeployment,
+                messages: chatHistory
+            })
+        })
+        .then(function(r) {
+            if (!r.ok) return r.json().then(function(d) { throw new Error(d.detail || 'Chat failed'); });
+            return r.json();
+        })
+        .then(function(data) {
+            chatHistory.push({ role: 'assistant', content: data.response });
+            var indicator = document.getElementById('typingIndicator');
+            if (indicator) indicator.remove();
 
-            } catch (e) {
-                resultDiv.innerHTML = `<p style="color: red;"><strong>Investigation failed:</strong> ${e.message}</p>`;
-                resultDiv.style.display = 'block';
-            } finally {
-                btn.disabled = false;
-                loading.style.display = 'none';
-            }
-        }
-        
-        async function analyzeNamespace() {
-            const ns = document.getElementById('namespaceInput').value;
-            const btn = document.getElementById('analyzeNamespaceBtn');
-            const loading = document.getElementById('loading');
-            const resultDiv = document.getElementById('result');
-            const progressContainer = document.getElementById('progressContainer');
-            const progressFill = document.getElementById('progressFill');
-            const progressText = document.getElementById('progressText');
+            var aDiv = document.createElement('div');
+            aDiv.className = 'flex justify-start';
+            aDiv.innerHTML = '<div class="max-w-xs sm:max-w-lg px-4 py-3 rounded-lg bg-white border border-gray-200 text-sm md-content">' + marked.parse(data.response) + '</div>';
+            messagesDiv.appendChild(aDiv);
+        })
+        .catch(function(err) {
+            var indicator = document.getElementById('typingIndicator');
+            if (indicator) indicator.remove();
 
-            if (!ns) return;
-
-            btn.disabled = true;
-            loading.style.display = 'none';
-            resultDiv.style.display = 'none';
-            resultDiv.textContent = '';
-            
-            // Show progress bar
-            progressContainer.style.display = 'block';
-            progressFill.style.width = '0%';
-            progressFill.textContent = '0%';
-            progressText.textContent = 'Initializing namespace analysis...';
-
-            // Simulate progress since we can't get real-time updates
-            const progressSteps = [
-                { percent: 15, text: 'Gathering deployment information...' },
-                { percent: 30, text: 'Checking pod health status...' },
-                { percent: 45, text: 'Collecting events and logs...' },
-                { percent: 60, text: 'AI agent investigating issues...' },
-                { percent: 75, text: 'Analyzing patterns and root causes...' },
-                { percent: 90, text: 'Generating recommendations...' }
-            ];
-            
-            let currentStep = 0;
-            const progressInterval = setInterval(() => {
-                if (currentStep < progressSteps.length) {
-                    const step = progressSteps[currentStep];
-                    progressFill.style.width = step.percent + '%';
-                    progressFill.textContent = step.percent + '%';
-                    progressText.textContent = step.text;
-                    currentStep++;
-                }
-            }, 3000); // Update every 3 seconds
-
-            try {
-                const response = await fetch(`/api/investigate/namespace/${encodeURIComponent(ns)}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Error: ${response.statusText}`);
-                }
-
-                const data = await response.json();
-                
-                // Complete the progress bar
-                clearInterval(progressInterval);
-                progressFill.style.width = '100%';
-                progressFill.textContent = '100%';
-                progressText.textContent = 'Analysis complete!';
-                
-                // Hide progress bar after a moment
-                setTimeout(() => {
-                    progressContainer.style.display = 'none';
-                }, 1500);
-
-                // Format the output in Markdown
-                let output = '# Namespace Analysis\n\n';
-                
-                // Summary
-                output += `**Namespace:** ${data.summary.namespace}\n\n`;
-                output += `**Total Deployments:** ${data.summary.total_deployments}\n\n`;
-                output += `**Failing Deployments:** ${data.summary.failing_deployments}\n\n`;
-                output += `**Total Pods:** ${data.summary.total_pods}\n\n`;
-                output += `**Unhealthy Pods:** ${data.summary.unhealthy_pods}\n\n`;
-                
-                // Deployments with issues
-                if (data.deployments && data.deployments.length > 0) {
-                    const failingDeployments = data.deployments.filter(d => !d.healthy);
-                    if (failingDeployments.length > 0) {
-                        output += '## Failing Deployments\n\n';
-                        failingDeployments.forEach(dep => {
-                            output += `### ${dep.name}\n\n`;
-                            output += `- **Status:** ${dep.ready_replicas}/${dep.desired_replicas} replicas ready\n`;
-                            if (dep.conditions && dep.conditions.length > 0) {
-                                dep.conditions.forEach(cond => {
-                                    if (cond.status !== 'True') {
-                                        output += `- **${cond.type}:** ${cond.message}\n`;
-                                    }
-                                });
-                            }
-                            output += '\n';
-                        });
-                    }
-                }
-                
-                // Pods with issues
-                if (data.pods && data.pods.length > 0) {
-                    const unhealthyPods = data.pods.filter(p => !p.healthy);
-                    if (unhealthyPods.length > 0) {
-                        output += '## Unhealthy Pods\n\n';
-                        unhealthyPods.forEach(pod => {
-                            output += `### ${pod.name}\n\n`;
-                            output += `- **Phase:** ${pod.phase}\n`;
-                            if (pod.issues && pod.issues.length > 0) {
-                                pod.issues.forEach(issue => {
-                                    output += `- ${issue}\n`;
-                                });
-                            }
-                            output += '\n';
-                        });
-                    }
-                }
-                
-                // Recent events
-                if (data.events && data.events.length > 0) {
-                    const warningEvents = data.events.filter(e => e.type === 'Warning' || e.type === 'Error');
-                    if (warningEvents.length > 0) {
-                        output += '## Recent Warnings/Errors\n\n';
-                        warningEvents.slice(0, 10).forEach(event => {
-                            output += `### ${event.type}: ${event.reason}\n\n`;
-                            output += `- **Object:** ${event.object}\n`;
-                            output += `- **Message:** ${event.message}\n\n`;
-                        });
-                    }
-                }
-                
-                // AI Analysis
-                if (data.analysis) {
-                    output += '## AI Analysis & Recommendations\n\n';
-                    output += data.analysis;
-                } else if (!data.summary.has_issues) {
-                    output += '## Status\n\n';
-                    output += '✅ No issues detected in this namespace. All deployments and pods are healthy!';
-                }
-
-                // Render Markdown to HTML
-                resultDiv.innerHTML = marked.parse(output);
-                resultDiv.style.display = 'block';
-                
-                // Enable chat after successful investigation
-                document.getElementById('chatContainer').style.display = 'block';
-                currentNamespace = ns;
-                chatHistory = []; // Reset chat history for new investigation
-
-            } catch (e) {
-                clearInterval(progressInterval);
-                progressContainer.style.display = 'none';
-                resultDiv.innerHTML = `<p style="color: red;"><strong>Namespace analysis failed:</strong> ${e.message}</p>`;
-                resultDiv.style.display = 'block';
-            } finally {
-                btn.disabled = false;
-                loading.style.display = 'none';
-                loading.textContent = 'Investigating... This may take a minute.';
-            }
-        }
-        
-        async function sendChatMessage() {
-            const input = document.getElementById('chatInput');
-            const messagesDiv = document.getElementById('chatMessages');
-            const sendBtn = document.getElementById('chatSendBtn');
-            
-            const userMessage = input.value.trim();
-            if (!userMessage) return;
-            
-            // Remove placeholder text if this is the first message
-            const placeholderText = document.getElementById('placeholderText');
-            if (placeholderText) {
-                placeholderText.remove();
-            }
-            
-            // Add user message to chat history
-            chatHistory.push({
-                role: 'user',
-                content: userMessage
-            });
-            
-            // Display user message
-            const userMsgDiv = document.createElement('div');
-            userMsgDiv.style.cssText = 'margin-bottom: 15px; padding: 10px; background: #007bff; color: white; border-radius: 8px; margin-left: 20%;';
-            userMsgDiv.textContent = userMessage;
-            messagesDiv.appendChild(userMsgDiv);
-            
-            // Clear input and disable send button
-            input.value = '';
-            input.disabled = true;
-            sendBtn.disabled = true;
-            sendBtn.textContent = 'Thinking...';
-            
-            // Scroll to bottom
+            var errDiv = document.createElement('div');
+            errDiv.className = 'flex justify-start';
+            errDiv.innerHTML = '<div class="max-w-xs sm:max-w-md px-4 py-2 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">Error: ' + escapeHtml(err.message) + '</div>';
+            messagesDiv.appendChild(errDiv);
+        })
+        .finally(function() {
+            input.disabled = false;
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send';
+            input.focus();
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            
-            try {
-                const response = await fetch('/api/investigate/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        namespace: currentNamespace,
-                        deployment: currentDeployment,
-                        messages: chatHistory
-                    })
-                });
-                
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Chat request failed');
-                }
-                
-                const data = await response.json();
-                
-                // Add assistant response to chat history
-                chatHistory.push({
-                    role: 'assistant',
-                    content: data.response
-                });
-                
-                // Display assistant message
-                const assistantMsgDiv = document.createElement('div');
-                assistantMsgDiv.style.cssText = 'margin-bottom: 15px; padding: 10px; background: white; border: 1px solid #ddd; border-radius: 8px; margin-right: 20%;';
-                assistantMsgDiv.innerHTML = marked.parse(data.response);
-                messagesDiv.appendChild(assistantMsgDiv);
-                
-            } catch (e) {
-                // Display error message
-                const errorMsgDiv = document.createElement('div');
-                errorMsgDiv.style.cssText = 'margin-bottom: 15px; padding: 10px; background: #ffebee; color: #c62828; border-radius: 8px; border: 1px solid #ef5350;';
-                errorMsgDiv.textContent = `Error: ${e.message}`;
-                messagesDiv.appendChild(errorMsgDiv);
-            } finally {
-                input.disabled = false;
-                sendBtn.disabled = false;
-                sendBtn.textContent = 'Send';
-                input.focus();
-                
-                // Scroll to bottom
-                messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            }
-        }
-    </script>
-</body>
+        });
+    }
 
-</html>
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+</script>
+{% endblock %}

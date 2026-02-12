@@ -15,10 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import signal
 import sys
+import threading
+import time
 from typing import Optional
 
+from kubernetes import config as k8s_config
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -27,6 +31,17 @@ from .slack_commands import register_commands
 from .db import init_db, RolloutRepo, AlertRepo
 
 logger = logging.getLogger(__name__)
+
+# Initialize k8s config at module load time
+try:
+    k8s_config.load_incluster_config()
+    logger.info("Loaded in-cluster k8s config")
+except k8s_config.ConfigException:
+    try:
+        k8s_config.load_kube_config()
+        logger.info("Loaded local k8s config")
+    except Exception as e:
+        logger.warning(f"Could not load k8s config: {e}")
 
 
 class FyrSlackHandler:
@@ -43,6 +58,10 @@ class FyrSlackHandler:
             token=settings.slack_bot_token,
             signing_secret=settings.slack_signing_secret,
         )
+
+        self._thread_context: dict[str, dict[str, str | None]] = {}
+        self._thread_context_lock = threading.Lock()
+        self._agent = None
         
         # Register handlers
         register_commands(self.app)
@@ -56,6 +75,36 @@ class FyrSlackHandler:
         )
         
         logger.info("Fyr Slack handler initialized")
+
+    def _store_thread_context(self, thread_ts: str, namespace: str, deployment: str | None) -> None:
+        with self._thread_context_lock:
+            self._thread_context[thread_ts] = {
+                "namespace": namespace,
+                "deployment": deployment,
+                "is_first_investigation": True,  # Track if this is the first investigation
+            }
+
+    def _get_thread_context(self, thread_ts: str) -> dict[str, str | None] | None:
+        with self._thread_context_lock:
+            return self._thread_context.get(thread_ts)
+    
+    def _mark_thread_investigated(self, thread_ts: str) -> None:
+        """Mark that at least one investigation has been done in this thread."""
+        with self._thread_context_lock:
+            if thread_ts in self._thread_context:
+                self._thread_context[thread_ts]["is_first_investigation"] = False
+
+    def _get_agent(self):
+        if self._agent is None:
+            from .agent import InvestigatorAgent
+            self._agent = InvestigatorAgent(
+                model_name=settings.langchain_model_name,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                api_version=settings.openai_api_version,
+                azure_deployment=settings.azure_deployment,
+            )
+        return self._agent
     
     def _register_actions(self) -> None:
         """Register interactive component handlers."""
@@ -64,6 +113,7 @@ class FyrSlackHandler:
         def handle_investigate_further(ack, action, respond, client, body):
             """Handle 'Investigate Further' button click - start AI chat in thread."""
             ack()
+            logger.info(f"🔵 investigate_further button clicked")
             
             value = action.get("value", "")  # namespace/deployment
             parts = value.split("/", 1)
@@ -85,6 +135,8 @@ class FyrSlackHandler:
                 thread_ts=message_ts,
                 text=f"🤖 *Fyr AI Investigation*\n\nHi <@{user_id}>! I'm ready to help investigate `{target}`.\n\nYou can ask me questions like:\n• What caused this failure?\n• Show me the pod logs\n• What's the memory usage?\n• Are there any related events?\n\n_Just reply in this thread and I'll investigate!_"
             )
+            
+            self._store_thread_context(message_ts, namespace, deployment)
         
         @self.app.action("investigate_namespace")
         def handle_investigate_namespace(ack, action, respond, client, body):
@@ -183,7 +235,7 @@ class FyrSlackHandler:
                         "elements": [
                             {
                                 "type": "mrkdwn",
-                                "text": f"👀 *Acknowledged* by <@{user_id}> at <!date^{int(asyncio.get_event_loop().time())}^{{time}}|now>"
+                                "text": f"👀 *Acknowledged* by <@{user_id}> at <!date^{int(time.time())}^{{time}}|now>"
                             }
                         ]
                     })
@@ -200,6 +252,7 @@ class FyrSlackHandler:
             logger.info(f"Alert batch {batch_id} acknowledged by {user_name}")
         
         @self.app.action("view_in_fyr")
+        @self.app.action("view_rollout")
         @self.app.action("view_alert_batch")
         @self.app.action("view_namespace")
         @self.app.action("view_pipeline")
@@ -210,7 +263,7 @@ class FyrSlackHandler:
             logger.debug(f"Link button clicked: {action.get('action_id')}")
         
         # Catch-all for view_rollout_* buttons
-        @self.app.action({"action_id": "view_rollout_"})
+        @self.app.action(re.compile(r"^view_rollout_"))
         def handle_view_rollout(ack, action, body):
             """Handle rollout view buttons."""
             ack()
@@ -243,37 +296,181 @@ class FyrSlackHandler:
         @self.app.event("message")
         def handle_message(client, event, say):
             """Handle messages (for threaded AI chat)."""
-            # Only respond to thread replies that mention the bot
+            logger.info(f"🔵 Message event received: thread={event.get('thread_ts')}, text={event.get('text', '')[:50]}...")
+            
+            # Only respond to thread replies
             if "thread_ts" not in event:
+                logger.debug("Not a thread message, ignoring")
                 return
             
             text = event.get("text", "")
             user = event.get("user")
             channel = event.get("channel")
             thread_ts = event.get("thread_ts")
-            
-            # Check if this is a thread where we're doing investigation
-            # For now, respond to any thread message in channels where Fyr is present
-            # In production, track which threads have active investigations
+            subtype = event.get("subtype")
             
             # Skip bot's own messages
-            if event.get("bot_id"):
+            if event.get("bot_id") or subtype:
+                logger.debug(f"Bot message or subtype message, ignoring: bot_id={event.get('bot_id')}, subtype={subtype}")
                 return
             
-            # Simple check - if user is asking a question in a thread
-            if "?" in text or any(kw in text.lower() for kw in ["what", "why", "how", "show", "tell"]):
-                logger.info(f"Received question in thread: {text[:50]}...")
+            # Check if the parent message was posted by THIS bot to avoid CI/Dev clashes
+            # Fetch the thread parent message to check who posted it
+            try:
+                auth_result = client.auth_test()
+                our_bot_user_id = auth_result.get("user_id")
                 
-                # This would trigger the AI agent - for now just acknowledge
-                # Full implementation would use InvestigatorAgent with the thread context
-                say(
-                    thread_ts=thread_ts,
-                    text="🔍 Let me investigate that for you..."
+                thread_info = client.conversations_replies(
+                    channel=channel,
+                    ts=thread_ts,
+                    limit=1,
+                    inclusive=True
                 )
                 
-                # TODO: Implement full AI chat integration
-                # This requires passing the question to InvestigatorAgent
-                # and posting the response back to the thread
+                if thread_info and thread_info.get("messages"):
+                    parent_message = thread_info["messages"][0]
+                    parent_user = parent_message.get("user")
+                    
+                    # Only respond if WE posted the parent message
+                    if parent_user != our_bot_user_id:
+                        logger.debug(f"Thread parent posted by {parent_user}, not us ({our_bot_user_id}), ignoring")
+                        return
+                    
+                    logger.info(f"Thread parent confirmed as ours (user_id={our_bot_user_id})")
+                    
+            except Exception as e:
+                logger.warning(f"Could not verify thread ownership: {e}")
+                # Fallback to memory-based context check
+                context = self._get_thread_context(thread_ts)
+                if not context:
+                    logger.debug(f"No context found for thread {thread_ts} - not our thread")
+                    return
+            
+            # Check if we have context (optional, since we already verified ownership)
+            context = self._get_thread_context(thread_ts)
+            if context:
+                logger.info(f"Thread context found: {context}")
+            else:
+                logger.info(f"No stored context, but thread is ours - extracting from parent message")
+                # Try to extract namespace/deployment from parent message
+                try:
+                    if thread_info and thread_info.get("messages"):
+                        parent_text = thread_info["messages"][0].get("text", "")
+                        # Look for patterns like "namespace/deployment" or just "namespace"
+                        import re
+                        match = re.search(r'`([^/]+)/([^`]+)`', parent_text)
+                        if match:
+                            context = {
+                                "namespace": match.group(1),
+                                "deployment": match.group(2),
+                                "is_first_investigation": False
+                            }
+                            self._store_thread_context(thread_ts, context["namespace"], context["deployment"])
+                            logger.info(f"Recovered context from parent: {context}")
+                        else:
+                            match = re.search(r'`([^`]+)`', parent_text)
+                            if match:
+                                context = {
+                                    "namespace": match.group(1),
+                                    "deployment": None,
+                                    "is_first_investigation": False
+                                }
+                                self._store_thread_context(thread_ts, context["namespace"], None)
+                                logger.info(f"Recovered namespace context from parent: {context}")
+                except Exception as e:
+                    logger.warning(f"Could not extract context from parent message: {e}")
+                
+                if not context:
+                    logger.warning("Could not determine namespace/deployment for this thread")
+                    say(thread_ts=thread_ts, text="❌ Sorry, I've lost context for this thread. Please start a new investigation.")
+                    return
+            
+            # In an active investigation thread, respond to any user message
+            if text.strip():
+                logger.info(f"Received message in thread: {text[:50]}...")
+                
+                say(thread_ts=thread_ts, text="🔍 Let me look into that...")
+
+                namespace = context.get("namespace") if context else None
+                deployment = context.get("deployment") if context else None
+                is_first = context.get("is_first_investigation", False) if context else False
+                
+                if not namespace or not channel:
+                    return
+
+                try:
+                    from .slack_blocks import build_conversational_response
+                    from .models import Analysis
+
+                    if deployment:
+                        agent = self._get_agent()
+                        analysis = agent.investigate(
+                            deployment,
+                            namespace,
+                            question=text,
+                            is_initial_slack_investigation=False,  # Always conversational in threads
+                        )
+                        
+                        # Always use conversational format for thread replies
+                        blocks = build_conversational_response(analysis.likely_cause)
+                    else:
+                        from kubernetes import client as k8s_client, config as k8s_config
+                        from .namespace_analyzer import NamespaceAnalyzer
+
+                        try:
+                            k8s_config.load_incluster_config()
+                        except Exception:
+                            k8s_config.load_kube_config()
+
+                        core_v1 = k8s_client.CoreV1Api()
+                        apps_v1 = k8s_client.AppsV1Api()
+
+                        analyzer = NamespaceAnalyzer(
+                            model_name=settings.langchain_model_name,
+                            api_key=settings.openai_api_key,
+                            api_base=settings.openai_api_base,
+                            api_version=settings.openai_api_version,
+                            azure_deployment=settings.azure_deployment,
+                        )
+
+                        result = analyzer.analyze_namespace(
+                            namespace=namespace,
+                            core_v1=core_v1,
+                            apps_v1=apps_v1,
+                        )
+
+                        # Extract summary data
+                        summary = result.get('summary', {})
+                        analysis = result.get('analysis')
+                        
+                        # Build response text from namespace analysis
+                        if analysis:
+                            # If there's AI analysis, use that
+                            response_text = analysis
+                        elif summary.get('has_issues'):
+                            # Has issues but no AI analysis yet
+                            response_text = f"Found {summary.get('failing_deployments', 0)} failing deployments and {summary.get('unhealthy_pods', 0)} unhealthy pods in `{namespace}`."
+                        else:
+                            # No issues found
+                            response_text = f"Namespace `{namespace}` looks healthy! ✅\n\n"
+                            response_text += f"• {summary.get('total_deployments', 0)} deployments running\n"
+                            response_text += f"• {summary.get('total_pods', 0)} pods healthy\n"
+                        
+                        blocks = build_conversational_response(response_text)
+
+                    client.chat_postMessage(
+                        channel=channel,
+                        thread_ts=thread_ts,
+                        blocks=blocks,
+                    )
+                    
+                except Exception as e:
+                    logger.exception(f"Error handling thread question: {e}")
+                    client.chat_postMessage(
+                        channel=channel,
+                        thread_ts=thread_ts,
+                        text=f"❌ Sorry, I ran into an issue: {str(e)}",
+                    )
     
     def _build_app_home_view(self) -> dict:
         """Build the App Home tab view."""
@@ -346,7 +543,8 @@ class FyrSlackHandler:
                             "emoji": True
                         },
                         "url": f"{settings.dashboard_base_url or 'http://localhost:8000'}/rollout/{f.id}",
-                        "action_id": f"view_rollout_{f.id}"
+                        "action_id": "view_rollout",
+                        "value": str(f.id),
                     }
                 })
         else:

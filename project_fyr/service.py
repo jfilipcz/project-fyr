@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from kubernetes import client, config, watch
+from kubernetes.client.rest import ApiException
 from kubernetes.config.config_exception import ConfigException
 
 from .agent import InvestigatorAgent
@@ -101,7 +102,154 @@ class AnalysisWorker:
             default_channel=config.slack_default_channel,
             mock_log_file=config.slack_mock_log_file,
             base_url=config.slack_api_url,
+            enable_requestor_dm=config.enable_requestor_dm,
+            enable_owner_channel=config.enable_owner_channel,
+            cache_ttl_seconds=config.slack_routing_cache_ttl_seconds,
         )
+        # Initialize k8s API clients for pre-checks
+        self._apps_v1 = client.AppsV1Api()
+        self._core_v1 = client.CoreV1Api()
+
+    def _get_namespace_annotations(self, namespace: str) -> dict[str, str]:
+        try:
+            ns = self._core_v1.read_namespace(namespace)
+        except Exception as exc:
+            logger.warning(f"namespace lookup failed for {namespace}: {exc}")
+            return {}
+        return getattr(ns.metadata, "annotations", None) or {}
+
+    def _get_deployment_labels(self, namespace: str, deployment: str) -> dict[str, str]:
+        try:
+            dep = self._apps_v1.read_namespaced_deployment(deployment, namespace)
+        except Exception as exc:
+            logger.warning(f"deployment lookup failed for {namespace}/{deployment}: {exc}")
+            return {}
+        return getattr(dep.metadata, "labels", None) or {}
+
+    def _build_slack_routing_metadata(
+        self,
+        *,
+        namespace: str,
+        deployment: str | None = None,
+        namespace_channel: str | None = None,
+    ) -> dict[str, Any]:
+        annotations = self._get_namespace_annotations(namespace)
+        # Support both annotation styles: example.com/requestor-email and requestor (ephenv)
+        requestor_email = annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_EPHENV)
+        resolved_namespace_channel = namespace_channel or annotations.get(ANNOTATION_SLACK_CHANNEL)
+
+        owner_channel = None
+        if deployment:
+            labels = self._get_deployment_labels(namespace, deployment)
+            owner_channel = labels.get(LABEL_OWNER_CHANNEL)
+
+        metadata: dict[str, Any] = {}
+        if requestor_email:
+            metadata["requestor_email"] = requestor_email
+        if owner_channel:
+            metadata["owner_channel"] = owner_channel
+        if resolved_namespace_channel:
+            metadata["namespace_channel"] = resolved_namespace_channel
+        return metadata
+
+    def _is_deployment_healthy_now(self, deployment: str, namespace: str) -> bool:
+        """
+        Quick pre-check: Is the deployment actually healthy RIGHT NOW?
+        
+        This catches false positives BEFORE expensive LLM investigation.
+        Returns True if deployment is healthy (should skip investigation).
+        Returns False if deployment has issues (should investigate).
+        """
+        try:
+            # Check if namespace still exists
+            try:
+                self._core_v1.read_namespace(namespace)
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    logger.info(f"Pre-check: namespace_missing {namespace} (404) - skipping")
+                    return True  # Namespace deleted, skip investigation
+                raise
+            
+            # Check if deployment still exists
+            try:
+                dep = self._apps_v1.read_namespaced_deployment(deployment, namespace)
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    logger.info(f"Pre-check: deployment_missing {namespace}/{deployment} (404) - skipping")
+                    return True  # Deployment deleted, skip investigation
+                raise
+            
+            # Check deployment health using existing evaluate_deployment_phase logic
+            phase = evaluate_deployment_phase(dep)
+            
+            desired = getattr(dep.spec, "replicas", 0) or 0
+            if desired == 0:
+                logger.info(
+                    f"Pre-check: desired_zero {namespace}/{deployment} desired=0 - skipping"
+                )
+                return True
+
+            if phase == "STABLE":
+                available = getattr(dep.status, "available_replicas", None) or getattr(dep.status, "availableReplicas", None)
+                logger.info(
+                    f"Pre-check: healthy_phase {namespace}/{deployment} phase=STABLE "
+                    f"available={available} desired={desired}"
+                )
+                return True
+            
+            # Also check pod health - maybe rollout succeeded
+            selector = dep.spec.selector.match_labels or {}
+            label_selector = ",".join(f"{k}={v}" for k, v in selector.items())
+            pods = self._core_v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
+            
+            if not pods.items:
+                # No pods at all - likely namespace being torn down
+                logger.info(
+                    f"Pre-check: healthy_no_pods {namespace}/{deployment} selector={label_selector} - likely teardown"
+                )
+                return True
+            
+            # Count healthy vs unhealthy pods
+            running_ready = 0
+            total_pods = len(pods.items)
+            
+            for pod in pods.items:
+                if pod.status.phase == "Running":
+                    # Check if all containers are ready
+                    if pod.status.container_statuses:
+                        all_ready = all(cs.ready for cs in pod.status.container_statuses)
+                        if all_ready:
+                            running_ready += 1
+            
+            # If all pods are running and ready, deployment is healthy
+            if running_ready == total_pods and total_pods > 0:
+                logger.info(
+                    f"Pre-check: healthy_all_ready {namespace}/{deployment} "
+                    f"ready={running_ready} total={total_pods} selector={label_selector}"
+                )
+                return True
+            
+            # Check for active failure signals
+            signals = analyze_pod_failures(pods.items)
+            if signals.total_failing == 0 and phase not in ("FAILED_PROGRESS", "PENDING"):
+                # No active failures detected - might be transient
+                logger.info(
+                    f"Pre-check: {namespace}/{deployment} - no active failure signals "
+                    f"(phase={phase}, failing=0) - possible recovery in progress"
+                )
+                # Don't mark as healthy yet - let investigation proceed to confirm
+                return False
+            
+            # Has failure signals - should investigate
+            logger.debug(
+                f"Pre-check: {namespace}/{deployment} has issues - "
+                f"phase={phase}, failing_pods={signals.total_failing}/{signals.total_pods}"
+            )
+            return False
+            
+        except Exception as e:
+            logger.warning(f"Pre-check error for {namespace}/{deployment}: {e} - proceeding with investigation")
+            return False  # On error, proceed with investigation to be safe
 
     def loop(self):
         while True:
@@ -120,14 +268,44 @@ class AnalysisWorker:
         rollouts = self._repo.list_failed(self._cluster)
         for rollout in rollouts:
             try:
+                # Check if namespace still exists (ephemeral CI namespaces get deleted)
+                try:
+                    self._core_v1.read_namespace(rollout.namespace)
+                except ApiException as e:
+                    if e.status == 404:
+                        logger.info(
+                            f"Namespace {rollout.namespace} no longer exists - discarding rollout {rollout.id}"
+                        )
+                        self._repo.discard_analysis(
+                            rollout.id,
+                            reason="Namespace deleted (ephemeral CI environment)",
+                        )
+                        continue
+                
+                # Pre-check is still useful for logging, but failed rollouts must be analyzed.
+                if self._is_deployment_healthy_now(rollout.deployment, rollout.namespace):
+                    logger.info(
+                        f"Pre-check: {rollout.namespace}/{rollout.deployment} appears healthy, "
+                        "but rollout is FAILED - proceeding with investigation"
+                    )
+                
                 logger.info(f"Starting investigation for rollout {rollout.namespace}/{rollout.deployment}")
                 self._investigate_rollout(rollout)
             except Exception as exc:
                 logger.error(f"rollout analysis error: {exc}")
 
     def _investigate_rollout(self, rollout):
-        # Agentic investigation
-        analysis = self._agent.investigate(rollout.deployment, rollout.namespace)
+        # Extract trigger context from rollout metadata for investigation enrichment
+        trigger_context = None
+        if rollout.metadata_json:
+            trigger_context = rollout.metadata_json.get("trigger_context")
+        
+        # Agentic investigation with trigger context
+        analysis = self._agent.investigate(
+            rollout.deployment, 
+            rollout.namespace,
+            trigger_context=trigger_context,
+        )
         
         # Create a dummy ReducedContext for DB compatibility
         reduced = ReducedContext(
@@ -149,9 +327,20 @@ class AnalysisWorker:
         metadata = rollout_metadata_dict(rollout)
         metadata.update(
             {
+                "cluster": self._config.k8s_cluster_name,
+                "namespace": rollout.namespace,
+                "deployment": rollout.deployment,
                 "triage_team": triage.team,
                 "triage_reason": triage.reason,
             }
+        )
+
+        metadata.update(
+            self._build_slack_routing_metadata(
+                namespace=rollout.namespace,
+                deployment=rollout.deployment,
+                namespace_channel=rollout.slack_channel,
+            )
         )
         
         channel = rollout.slack_channel
@@ -162,6 +351,7 @@ class AnalysisWorker:
             rollout_ref=rollout_ref,
             analysis=analysis,
             metadata=metadata,
+            rollout_id=rollout.id,
         )
         
         self._repo.update_notify_status(
@@ -218,24 +408,30 @@ class AnalysisWorker:
         # Agent investigation
         analysis = self._agent.investigate(deployment, namespace, alert_context=alert_context)
         
-        # Notify Slack
-        # We need to adapt SlackNotifier to handle alerts or just format it as generic message
-        # For now, let's reuse send_analysis but with alert-specific ref
-        
-        ref = f"AlertBatch #{batch.id} ({namespace}/{deployment})"
-        
-        # We don't have a rollout ID, so we can't use append_analysis easily without refactoring DB
-        # But we have InvestigationJob.analysis_id.
-        # We need to store the analysis somewhere. 
-        # The current schema links AnalysisRecord to Rollout via rollout_id.
-        # We should probably make rollout_id nullable in AnalysisRecord or add alert_batch_id.
-        # For this iteration, let's just log and notify Slack.
-        
-        self._slack.send_analysis(
-            channel=self._config.slack_default_channel,
-            rollout_ref=ref,
+        # Notify Slack with alert-specific blocks
+        alerts_payload = [
+            {
+                "labels": a.labels or {},
+                "annotations": a.annotations or {},
+                "starts_at": str(a.starts_at),
+                "ends_at": str(a.ends_at) if a.ends_at else None,
+            }
+            for a in alerts
+        ]
+
+        routing_metadata = self._build_slack_routing_metadata(
+            namespace=namespace,
+            deployment=None if deployment == "unknown" else deployment,
+        )
+
+        self._slack.send_alert_batch(
+            channel=None,
+            batch_id=batch.id,
+            namespace=namespace,
+            alerts=alerts_payload,
             analysis=analysis,
-            metadata={"type": "alert", "batch_id": batch.id}
+            primary_alert_name=batch.primary_fingerprint,
+            metadata=routing_metadata,
         )
         
         self._alert_repo.update_job_status(job.id, "done", completed_at=datetime.utcnow())
@@ -305,8 +501,15 @@ class AnalysisWorker:
         }
         if incident.metadata:
             metadata.update(incident.metadata)
+
+        metadata.update(
+            self._build_slack_routing_metadata(
+                namespace=incident.namespace,
+                namespace_channel=incident.slack_channel,
+            )
+        )
         
-        channel = incident.slack_channel or self._config.slack_default_channel
+        channel = incident.slack_channel
         sent = self._slack.send_analysis(
             channel=channel,
             rollout_ref=ref,
@@ -629,7 +832,7 @@ class AnalyzerService:
             logger.info("Prometheus metrics server started on port 8000")
         except Exception as e:
             logger.warning(f"Failed to start Prometheus metrics server: {e}")
-    """Map a Deployment status object to a coarse rollout phase."""
+
 
 def evaluate_deployment_phase(dep) -> str:
     """Map a Deployment status object to a coarse rollout phase."""
@@ -658,36 +861,173 @@ def list_deployment_pods(core_v1: client.CoreV1Api, dep) -> list:
 
 @dataclass
 class PodFailureSignals:
-    crashloop_pods: int = 0
-    image_pull_pods: int = 0
-    pending_scheduling_pods: int = 0
+    """Signals indicating pod failures, separated by permanence."""
     total_pods: int = 0
+    
+    # Image issues (may be transient or permanent)
+    image_pull_pods: int = 0  # ImagePullBackOff, ErrImagePull, InvalidImageName
+    
+    # Container configuration issues (permanent)
+    config_error_pods: int = 0  # CreateContainerConfigError (missing Secret/ConfigMap)
+    container_error_pods: int = 0  # CreateContainerError, RunContainerError
+    
+    # Runtime failures (usually permanent after multiple restarts)
+    crashloop_pods: int = 0  # CrashLoopBackOff
+    
+    # Scheduling issues (usually permanent)
+    unschedulable_pods: int = 0  # PodScheduled=False with Unschedulable reason
+    
+    # Track transient vs permanent for smarter alerting
+    transient_failure_pods: int = 0  # ErrImagePull, ImagePullBackOff (may self-heal)
+    permanent_failure_pods: int = 0  # InvalidImageName, CreateContainerConfigError, etc.
+    
+    # Track specific transient patterns
+    qps_exceeded_pods: int = 0  # Specifically "pull QPS exceeded" - very likely transient
+    
+    # Collected failure reasons for logging/analysis
+    failure_reasons: list = None
+    
+    def __post_init__(self):
+        if self.failure_reasons is None:
+            self.failure_reasons = []
+    
+    @property
+    def total_failing(self) -> int:
+        """Total pods with any failure conditions."""
+        return (
+            self.image_pull_pods + 
+            self.config_error_pods + 
+            self.container_error_pods + 
+            self.crashloop_pods + 
+            self.unschedulable_pods
+        )
+    
+    @property
+    def has_only_transient_failures(self) -> bool:
+        """Check if all failures are transient (may self-heal)."""
+        return self.transient_failure_pods > 0 and self.permanent_failure_pods == 0
+    
+    @property
+    def is_likely_qps_issue(self) -> bool:
+        """Check if this looks like a registry rate limit issue."""
+        return self.qps_exceeded_pods > 0 and self.permanent_failure_pods == 0
+
+
+# Waiting reasons that indicate permanent failures (won't self-heal)
+# Transient failure reasons that often self-heal (need confirmation before alerting)
+TRANSIENT_FAILURE_REASONS = {
+    # Rate limits and temporary network issues often resolve
+    "ErrImagePull",  # First pull attempt - may be QPS limit, network blip
+    "ImagePullBackOff",  # Backoff state - kubelet will retry
+}
+
+# Truly permanent failure reasons (alert immediately)
+PERMANENT_FAILURE_REASONS = {
+    # Image issues that won't self-heal
+    "InvalidImageName",  # Typo in image name - won't fix itself
+    "RegistryUnavailable",  # Registry is down or unreachable
+    
+    # Container configuration (missing Secret/ConfigMap, bad volume mounts)
+    "CreateContainerConfigError",
+    "CreateContainerError",
+    "RunContainerError",
+    
+    # Runtime crashes
+    "CrashLoopBackOff",
+    
+    # Init container failures
+    "InitContainerCrashLoopBackOff",
+}
+
+# Combined set for detection (but we handle them differently)
+ALL_FAILURE_REASONS = TRANSIENT_FAILURE_REASONS | PERMANENT_FAILURE_REASONS
 
 
 def analyze_pod_failures(pods: list) -> PodFailureSignals:
+    """Analyze pods for failure conditions, distinguishing transient from permanent."""
     signals = PodFailureSignals(total_pods=len(pods))
+    
     for pod in pods:
-        phase = (pod.status.phase or "").upper()
-        for cs in pod.status.container_statuses or []:
+        pod_name = pod.metadata.name if pod.metadata else "unknown"
+        
+        # Check container statuses (including init containers)
+        all_container_statuses = list(pod.status.container_statuses or [])
+        all_container_statuses.extend(pod.status.init_container_statuses or [])
+        
+        for cs in all_container_statuses:
             waiting = cs.state.waiting if cs.state else None
             if not waiting:
                 continue
             reason = waiting.reason or ""
-            if reason == "CrashLoopBackOff":
-                signals.crashloop_pods += 1
-            if reason in ("ImagePullBackOff", "ErrImagePull"):
+            message = waiting.message or ""
+            
+            if reason in ALL_FAILURE_REASONS:
+                signals.failure_reasons.append(f"{pod_name}: {reason} - {message[:100]}")
+            
+            # Track transient vs permanent
+            if reason in TRANSIENT_FAILURE_REASONS:
+                signals.transient_failure_pods += 1
+                # Check for specific QPS exceeded pattern
+                if "QPS exceeded" in message or "pull QPS" in message.lower():
+                    signals.qps_exceeded_pods += 1
+            elif reason in PERMANENT_FAILURE_REASONS:
+                signals.permanent_failure_pods += 1
+            
+            # Categorize by failure type (for backwards compatibility)
+            if reason in ("ImagePullBackOff", "ErrImagePull", "InvalidImageName", "RegistryUnavailable"):
                 signals.image_pull_pods += 1
-        if phase == "PENDING":
-            signals.pending_scheduling_pods += 1
+            elif reason == "CreateContainerConfigError":
+                signals.config_error_pods += 1
+            elif reason in ("CreateContainerError", "RunContainerError"):
+                signals.container_error_pods += 1
+            elif reason in ("CrashLoopBackOff", "InitContainerCrashLoopBackOff"):
+                signals.crashloop_pods += 1
+        
+        # Check pod conditions for scheduling failures
+        for condition in pod.status.conditions or []:
+            if condition.type == "PodScheduled" and condition.status == "False":
+                reason = condition.reason or ""
+                message = condition.message or ""
+                # Unschedulable means no node can satisfy requirements (resources, selectors, taints)
+                if reason == "Unschedulable":
+                    signals.unschedulable_pods += 1
+                    signals.permanent_failure_pods += 1  # Unschedulable is permanent
+                    signals.failure_reasons.append(f"{pod_name}: Unschedulable - {message[:100]}")
+    
     return signals
 
 
 def should_fail_early(signals: PodFailureSignals, min_pods: int = 1) -> bool:
+    """
+    Determine if we should mark rollout as failed immediately.
+    
+    Only triggers early failure for PERMANENT failures. Transient failures
+    (like QPS rate limits) should be given time to self-heal.
+    """
     if signals.total_pods < min_pods:
         return False
-    failing = signals.crashloop_pods + signals.image_pull_pods
-    if failing >= max(1, signals.total_pods // 2):
+    
+    # If we only have transient failures (QPS exceeded, first image pull attempts),
+    # do NOT fail early - these often self-heal
+    if signals.has_only_transient_failures:
+        return False
+    
+    # If this looks like a pure QPS/rate limit issue, don't fail early
+    if signals.is_likely_qps_issue:
+        return False
+    
+    # For permanent failures, fail if at least 1 pod (or half of total pods) is affected
+    threshold = max(1, signals.total_pods // 2)
+    if signals.permanent_failure_pods >= threshold:
         return True
+    
+    # Also fail for crashloop (after some restarts) and config errors
+    if signals.config_error_pods > 0 or signals.container_error_pods > 0:
+        return True
+    
+    if signals.crashloop_pods > 0:
+        return True
+    
     return False
 
 
@@ -703,11 +1043,18 @@ def rollout_metadata_dict(rollout) -> dict[str, Any]:
 ANNOTATION_SLACK_CHANNEL = "project-fyr/slack-channel"
 ANNOTATION_TEAM = "project-fyr/team"
 ANNOTATION_PREFIX = "project-fyr/"
+ANNOTATION_REQUESTOR_EMAIL = "example.com/requestor-email"
+ANNOTATION_REQUESTOR_EMAIL_EPHENV = "requestor"  # Ephenv operator style
+LABEL_OWNER_CHANNEL = "example.com/owner-channel"
 
 
 def parse_namespace_annotations(annotations: dict[str, str] | None) -> dict[str, Any]:
     annotations = annotations or {}
     namespace_specific = {k: v for k, v in annotations.items() if k.startswith(ANNOTATION_PREFIX)}
+    # Support both annotation styles: example.com/requestor-email and requestor (ephenv)
+    requestor_email = annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_EPHENV)
+    if requestor_email:
+        namespace_specific[ANNOTATION_REQUESTOR_EMAIL] = requestor_email
     metadata: dict[str, Any] = {}
     if namespace_specific:
         metadata["metadata_json"] = namespace_specific
@@ -715,6 +1062,23 @@ def parse_namespace_annotations(annotations: dict[str, str] | None) -> dict[str,
         metadata["team"] = team
     if channel := annotations.get(ANNOTATION_SLACK_CHANNEL):
         metadata["slack_channel"] = channel
+    return metadata
+
+
+def parse_deployment_labels(labels: dict[str, str] | None) -> dict[str, Any]:
+    labels = labels or {}
+    metadata: dict[str, Any] = {}
+    if owner_channel := labels.get(LABEL_OWNER_CHANNEL):
+        metadata["deployment_labels"] = {LABEL_OWNER_CHANNEL: owner_channel}
+    return metadata
+
+
+def merge_rollout_metadata(namespace_metadata: dict[str, Any], deployment_labels: dict[str, str] | None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    ns_metadata_json = namespace_metadata.get("metadata_json") or {}
+    metadata.update(ns_metadata_json)
+    if ANNOTATION_REQUESTOR_EMAIL in ns_metadata_json:
+        metadata.update(parse_deployment_labels(deployment_labels))
     return metadata
 
 
@@ -765,8 +1129,8 @@ def handle_deployment_event(
         return
     
     labels = dep.metadata.labels or {}
-    annotations = dep.metadata.annotations or {}
     ns_meta = namespace_metadata or {}
+    merged_metadata_json = merge_rollout_metadata(ns_meta, labels)
     
     # When watch_all_namespaces=False, check if this deployment should be watched
     # The watch selector filters by deployment label, but we also support namespace-level
@@ -803,15 +1167,15 @@ def handle_deployment_event(
             status=status,
             started_at=now,
             origin="k8s",
-            metadata_json=ns_meta.get("metadata_json") or {},
+            metadata_json=merged_metadata_json,
             team=ns_meta.get("team"),
             slack_channel=ns_meta.get("slack_channel"),
         )
     else:
-        if ns_meta:
+        if ns_meta or merged_metadata_json:
             repo.update_metadata(
                 rollout.id,
-                metadata_json=ns_meta.get("metadata_json"),
+                metadata_json=merged_metadata_json,
                 team=ns_meta.get("team"),
                 slack_channel=ns_meta.get("slack_channel"),
             )
@@ -837,158 +1201,96 @@ def reconcile_rollout(
             logger.error(f"pod analysis error: {exc}")
         else:
             if should_fail_early(signals, min_pods=1):
+                # Log the specific failure reasons for debugging
+                logger.info(
+                    f"Early failure detected for {rollout.namespace}/{rollout.deployment}: "
+                    f"image_pull={signals.image_pull_pods}, config_error={signals.config_error_pods}, "
+                    f"container_error={signals.container_error_pods}, crashloop={signals.crashloop_pods}, "
+                    f"unschedulable={signals.unschedulable_pods}"
+                )
+                if signals.failure_reasons:
+                    for reason in signals.failure_reasons[:5]:  # Log first 5 reasons
+                        logger.info(f"  - {reason}")
+                
+                # Store trigger context for investigation enrichment
+                failure_type = "permanent"
+                if signals.crashloop_pods > 0:
+                    failure_type = "crashloop"
+                elif signals.config_error_pods > 0:
+                    failure_type = "config_error"
+                elif signals.unschedulable_pods > 0:
+                    failure_type = "unschedulable"
+                
+                time_to_failure = int(age.total_seconds()) if age else None
+                repo.append_trigger_context(
+                    rollout.id,
+                    trigger_reason="permanent_failure_detected",
+                    failure_observations=signals.failure_reasons[:5],
+                    is_transient=False,
+                    time_to_failure_seconds=time_to_failure,
+                    failure_type=failure_type,
+                )
+                
                 repo.update_status(rollout.id, RolloutStatus.FAILED, failed_at=now)
+                # Queue for immediate analysis
+                repo.queue_for_analysis(rollout.id)
                 return
+            elif signals.transient_failure_pods > 0:
+                # Log transient failures that we're NOT failing early on
+                logger.info(
+                    f"Transient failures detected for {rollout.namespace}/{rollout.deployment}, "
+                    f"waiting for confirmation: transient={signals.transient_failure_pods}, "
+                    f"qps_exceeded={signals.qps_exceeded_pods}, permanent={signals.permanent_failure_pods}"
+                )
+                # Store transient failure observations for later investigation context
+                repo.append_trigger_context(
+                    rollout.id,
+                    trigger_reason="transient_failure_observed",
+                    failure_observations=signals.failure_reasons[:5],
+                    is_transient=True,
+                    failure_type="transient_image_pull" if signals.qps_exceeded_pods > 0 else "transient",
+                )
 
     if phase == "STABLE":
         repo.update_status(rollout.id, RolloutStatus.SUCCESS, completed_at=now)
+        # No analysis needed for successful rollouts
         return
 
     if phase == "FAILED_PROGRESS":
+        # Store trigger context for investigation
+        time_to_failure = int(age.total_seconds()) if age else None
+        repo.append_trigger_context(
+            rollout.id,
+            trigger_reason="deployment_progress_failed",
+            failure_observations=["Kubernetes reported Progressing=False condition"],
+            is_transient=False,
+            time_to_failure_seconds=time_to_failure,
+            failure_type="failed_progress",
+        )
         repo.update_status(rollout.id, RolloutStatus.FAILED, failed_at=now)
+        # Queue for analysis
+        repo.queue_for_analysis(rollout.id)
         return
 
     if age > timeout:
+        # Store trigger context for timeout investigation
+        time_to_failure = int(age.total_seconds()) if age else None
+        repo.append_trigger_context(
+            rollout.id,
+            trigger_reason="rollout_timeout",
+            failure_observations=[f"Rollout exceeded {timeout.total_seconds()}s timeout without completing"],
+            is_transient=False,
+            time_to_failure_seconds=time_to_failure,
+            failure_type="timeout",
+        )
         repo.update_status(rollout.id, RolloutStatus.FAILED, failed_at=now)
+        # Queue for analysis (timeout failure)
+        repo.queue_for_analysis(rollout.id)
         return
 
     new_status = RolloutStatus.PENDING if phase == "PENDING" else RolloutStatus.ROLLING_OUT
     if rollout.status != new_status:
         repo.update_status(rollout.id, new_status)
-
-
-class AnalysisWorker:
-    def __init__(self, repo: RolloutRepo, cluster: str, config: Settings):
-        self._repo = repo
-        self._cluster = cluster
-        self._config = config
-        self._agent = InvestigatorAgent(
-            model_name=config.langchain_model_name,
-            api_key=config.openai_api_key,
-            api_base=config.openai_api_base,
-            api_version=config.openai_api_version,
-            azure_deployment=config.azure_deployment,
-        )
-        self._slack = SlackNotifier(
-            token=config.slack_bot_token,
-            default_channel=config.slack_default_channel,
-            mock_log_file=config.slack_mock_log_file,
-            base_url=config.slack_api_url,
-        )
-
-    def loop(self):
-        while True:
-            # Investigate failed rollouts
-            failed_rollouts = self._repo.list_failed(self._cluster)
-            
-            # Investigate stuck pending rollouts (pending for > threshold)
-            stuck_pending = self._repo.list_stuck_pending(
-                self._cluster, 
-                self._config.pending_investigation_threshold_seconds
-            )
-            
-            rollouts = failed_rollouts + stuck_pending
-            
-            for rollout in rollouts:
-                try:
-                    status_info = f"status={rollout.status}, age={(datetime.utcnow() - rollout.started_at).total_seconds():.0f}s"
-                    logger.info(f"Starting investigation for {rollout.namespace}/{rollout.deployment} ({status_info})")
-                    
-                    # Agentic investigation
-                    analysis = self._agent.investigate(rollout.deployment, rollout.namespace)
-                    
-                    # Create a dummy ReducedContext for DB compatibility
-                    # The agent pulls data dynamically, so we don't have a static reduced context to store.
-                    # We store a placeholder to satisfy the schema.
-                    reduced = ReducedContext(
-                        namespace=rollout.namespace,
-                        deployment=rollout.deployment,
-                        generation=rollout.generation,
-                        summary="Agentic Investigation",
-                        phase="FAILED", # Assumed since we are processing failed rollouts
-                        failing_pods=[],
-                        log_clusters=[],
-                        events=[],
-                        argocd_status=None,
-                    )
-
-                    triage = triage_failure(reduced, analysis)
-                    analysis.triage_team = triage.team
-                    analysis.triage_reason = triage.reason
-                    
-                    metadata = rollout_metadata_dict(rollout)
-                    metadata.update(
-                        {
-                            "triage_team": triage.team,
-                            "triage_reason": triage.reason,
-                        }
-                    )
-                    
-                    # Save analysis FIRST, before attempting Slack notification
-                    # This ensures we don't lose the analysis if Slack fails
-                    self._repo.append_analysis(
-                        rollout.id,
-                        reduced_context=reduced,
-                        analysis=analysis,
-                        model_name=self._config.langchain_model_name,
-                    )
-                    
-                    # Now try to send Slack notification
-                    channel = rollout.slack_channel
-                    rollout_ref = f"{rollout.namespace}/{rollout.deployment}#{rollout.generation}"
-                    
-                    try:
-                        sent = self._slack.send_analysis(
-                            channel=channel,
-                            rollout_ref=rollout_ref,
-                            analysis=analysis,
-                            metadata=metadata,
-                        )
-                        self._repo.update_notify_status(
-                            rollout.id, NotifyStatus.SENT if sent else NotifyStatus.FAILED
-                        )
-                    except Exception as slack_exc:
-                        logger.warning(f"Failed to send Slack notification: {slack_exc}")
-                        self._repo.update_notify_status(rollout.id, NotifyStatus.FAILED)
-                except Exception as exc:  # pragma: no cover - diagnostic path
-                    logger.error(f"analysis loop error: {exc}")
-            time.sleep(15)
-
-
-def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    service = WatcherService()
-    service.start()
-
-
-class AnalyzerService:
-    def __init__(self, config: Settings | None = None):
-        self._config = config or settings
-        self._engine = init_db(self._config.database_url)
-        self._repo = RolloutRepo(self._engine)
-
-    def start(self):
-        try:
-            config.load_incluster_config()
-            logger.info("Analyzer loaded in-cluster config")
-        except ConfigException:
-            config.load_kube_config()
-            logger.info("Analyzer loaded kube config")
-
-        # Start Prometheus metrics server in a background thread
-        self._start_metrics_server()
-
-        worker = AnalysisWorker(self._repo, self._config.k8s_cluster_name, self._config)
-        worker.loop()
-    
-    def _start_metrics_server(self):
-        """Start Prometheus metrics HTTP server on port 8000."""
-        from prometheus_client import start_http_server
-        try:
-            start_http_server(8000)
-            logger.info("Prometheus metrics server started on port 8000")
-        except Exception as e:
-            logger.warning(f"Failed to start Prometheus metrics server: {e}")
 
 
 def run_watcher():
@@ -1002,5 +1304,5 @@ def run_analyzer():
 __all__ = ["WatcherService", "AnalyzerService", "run_watcher", "run_analyzer"]
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     main()

@@ -107,22 +107,35 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         
         Tries SSO provider first, then falls back to local provider.
         """
+        print(f"[DEBUG] _validate_with_providers called with token length: {len(token)}")
+        logger.info(f"[AUTH] Attempting to validate token (length: {len(token)})")
+        
         # Try SSO provider first
         if self.sso_provider:
+            print(f"[DEBUG] SSO provider exists, attempting validation")
             try:
+                logger.info(f"[AUTH] Trying SSO provider")
                 user_info = await self.sso_provider.validate_token(token)
+                logger.info(f"[AUTH] SSO provider successfully validated token")
                 return user_info
             except Exception as e:
-                logger.debug(f"SSO validation failed: {str(e)}")
+                print(f"[DEBUG] SSO provider failed: {type(e).__name__}: {str(e)}")
+                logger.info(f"[AUTH] SSO validation failed: {str(e)}, trying local provider")
         
         # Fall back to local provider
         if self.local_provider:
+            print(f"[DEBUG] Local provider exists, attempting validation")
             try:
+                logger.info(f"[AUTH] Trying local provider")
                 user_info = await self.local_provider.validate_token(token)
+                logger.info(f"[AUTH] Local provider successfully validated token")
                 return user_info
             except Exception as e:
-                logger.debug(f"Local validation failed: {str(e)}")
+                print(f"[DEBUG] Local provider failed: {type(e).__name__}: {str(e)}")
+                logger.warning(f"[AUTH] Local validation failed: {str(e)}", exc_info=True)
         
+        print(f"[DEBUG] All providers failed")
+        logger.warning(f"[AUTH] All providers failed to validate token")
         return None
     
     def _unauthorized_response(self, request: Request):

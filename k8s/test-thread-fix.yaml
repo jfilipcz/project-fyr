@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fyr-thread-test
+  labels:
+    project-fyr/enabled: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thread-test-fail
+  namespace: fyr-thread-test
+  labels:
+    app: thread-test
+    test: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: thread-test
+  template:
+    metadata:
+      labels:
+        app: thread-test
+    spec:
+      containers:
+      - name: failing-container
+        image: busybox:this-tag-does-not-exist-v1.0.41
+        command: ["sh", "-c", "echo 'Starting' && sleep 3600"]
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"

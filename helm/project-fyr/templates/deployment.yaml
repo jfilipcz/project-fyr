@@ -37,6 +37,8 @@ spec:
                 name: {{ include "project-fyr.fullname" . }}
             - secretRef:
                 name: project-fyr-secrets
+            - secretRef:
+                name: fyr-slack-secrets
             {{- if .Values.secrets.existingSecret }}
             - secretRef:
                 name: {{ .Values.secrets.existingSecret }}

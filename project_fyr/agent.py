@@ -7,6 +7,7 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
+from langchain_core.callbacks import BaseCallbackHandler
 from prometheus_client import Histogram, Counter
 
 from .models import Analysis
@@ -16,10 +17,13 @@ from .tools import (
     k8s_events,
     k8s_get_argocd_application,
     k8s_get_configmap,
+    k8s_get_deployment_history,
     k8s_get_endpoints,
+    k8s_get_init_containers,
     k8s_get_network,
     k8s_get_network_policies,
     k8s_get_nodes,
+    k8s_get_replicasets,
     k8s_get_resources,
     k8s_get_secret_structure,
     k8s_get_storage,
@@ -30,6 +34,18 @@ from .tools import (
     get_namespace_resource_quotas,
     get_namespace_pods_summary,
     get_namespace_events,
+    # Phase 2 - Scaling & Resource Issues
+    k8s_get_hpa,
+    k8s_get_pod_disruption_budget,
+    k8s_get_limit_ranges,
+    # Phase 3 - Advanced Diagnostics
+    k8s_get_jobs,
+    k8s_get_priority_classes,
+    k8s_get_cronjobs,
+    k8s_check_image_pull_status,
+    k8s_get_service_mesh_status,
+    k8s_get_resource_quotas_usage,
+    k8s_check_service_connectivity,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,6 +61,12 @@ AGENT_INVESTIGATIONS = Counter(
     'project_fyr_agent_investigations_total',
     'Total number of investigations performed',
     ['status']  # success, error, mock, disabled
+)
+
+AGENT_TOOL_CALLS = Counter(
+    'project_fyr_agent_tool_calls_total',
+    'Total number of tool calls made by the agent',
+    ['tool_name']  # k8s_get_resources, k8s_logs, k8s_events, etc.
 )
 
 AGENT_SYSTEM_PROMPT = """You are an expert Kubernetes SRE. Your task is to diagnose why a deployment is failing.
@@ -82,16 +104,27 @@ Your final answer must be a structured analysis containing:
 - Recommended remediation steps.
 - A severity level (low, medium, high, critical).
 
-FORMAT YOUR RESPONSE IN MARKDOWN:
+FORMAT YOUR RESPONSE IN CLEAN MARKDOWN:
 - Use headings (##, ###) to structure sections
 - Use bullet points for lists
-- Use **bold** for emphasis
+- Use **bold** for emphasis (ensure asterisks are directly adjacent to text, no spaces: **word** not ** word **)
 - Use `code` formatting for resource names, commands, and technical terms
 - Use code blocks (```) for multi-line logs or YAML
 - Make your response easy to read and visually organized
+- IMPORTANT: Do not mix single and double asterisks (use **bold** consistently, never *bold *)
+- When writing numbered lists with bold items, format as: **1. Item** not *1. *Item**
 
 Do not give up easily. Dig deep into logs and events.
 """
+
+class ToolMetricsCallback(BaseCallbackHandler):
+    """Callback handler to track tool usage metrics."""
+    
+    def on_tool_start(self, serialized: dict[str, Any], input_str: str, **kwargs: Any) -> None:
+        """Track when a tool is called."""
+        tool_name = serialized.get("name", "unknown")
+        AGENT_TOOL_CALLS.labels(tool_name=tool_name).inc()
+        logger.debug(f"Tool called: {tool_name}")
 
 class InvestigatorAgent:
     def __init__(self, model_name: str = "gpt-4-turbo-preview", api_key: str | None = None, 
@@ -132,6 +165,27 @@ class InvestigatorAgent:
                 k8s_get_network_policies,
                 k8s_get_endpoints,
                 k8s_query_prometheus,
+                # Phase 1 tools - Core troubleshooting
+                k8s_get_init_containers,
+                k8s_get_replicasets,
+                k8s_get_deployment_history,
+                # Phase 2 tools - Scaling & Resource Issues
+                k8s_get_hpa,
+                k8s_get_pod_disruption_budget,
+                k8s_get_limit_ranges,
+                # Phase 3 tools - Advanced Diagnostics
+                k8s_get_jobs,
+                k8s_get_priority_classes,
+                k8s_get_cronjobs,
+                k8s_check_image_pull_status,
+                k8s_get_service_mesh_status,
+                k8s_get_resource_quotas_usage,
+                k8s_check_service_connectivity,
+                # Namespace investigation tools
+                get_namespace_details,
+                get_namespace_resource_quotas,
+                get_namespace_pods_summary,
+                get_namespace_events,
             ]
             
             # Use the new create_agent API with recursion limit
@@ -144,7 +198,15 @@ class InvestigatorAgent:
         else:
             self._agent = None
 
-    def investigate(self, deployment: str, namespace: str, alert_context: dict[str, Any] | None = None) -> Analysis:
+    def investigate(
+        self,
+        deployment: str,
+        namespace: str,
+        alert_context: dict[str, Any] | None = None,
+        question: str | None = None,
+        is_initial_slack_investigation: bool = False,
+        trigger_context: dict[str, Any] | None = None,
+    ) -> Analysis:
         if self._model_name == "mock":
             AGENT_INVESTIGATIONS.labels(status='mock').inc()
             return Analysis(
@@ -166,6 +228,30 @@ class InvestigatorAgent:
         try:
             # Use the new agent API - it expects messages format
             user_message = f"Investigate the deployment '{deployment}' in namespace '{namespace}'."
+
+            if question:
+                # Conversational mode for follow-up questions in Slack threads
+                user_message = (
+                    f"Context: You are helping investigate the deployment '{deployment}' in namespace '{namespace}'.\n\n"
+                    f"The user asked: {question}\n\n"
+                    "IMPORTANT INSTRUCTIONS FOR YOUR RESPONSE:\n"
+                    "1. Answer their question directly and conversationally - like a helpful colleague in a chat\n"
+                    "2. DO NOT use formal headers like '## Summary' or '## Likely Cause'\n"
+                    "3. DO NOT provide a full structured analysis unless they ask for one\n"
+                    "4. Keep your response focused on their specific question\n"
+                    "5. Use Slack-compatible formatting: *bold* for emphasis, `code` for technical terms, bullet points (•) for lists\n"
+                    "6. Be concise but helpful - this is a conversation, not a report\n"
+                    "7. If you need to investigate using tools, do so, but present findings naturally\n"
+                    "8. End with a brief offer to help with anything else if appropriate"
+                )
+            elif is_initial_slack_investigation:
+                user_message += (
+                    "\n\nIMPORTANT: This investigation is triggered from Slack. "
+                    "At the end of your analysis, invite the user to ask follow-up questions by replying in the thread. "
+                    "Don't say 'Just tell me' or 'Continue investigation' - instead, say something like "
+                    "'Feel free to ask me any questions by replying in this thread!' or "
+                    "'If you have more questions, just ask here in the thread!'"
+                )
             
             if alert_context:
                 user_message += f"\n\nCONTEXT: The investigation was triggered by the following alerts:\n{alert_context.get('summary', '')}\n"
@@ -176,9 +262,26 @@ class InvestigatorAgent:
                         user_message += f"- {a.get('name')} ({a.get('severity')}): {a.get('description')}\n"
                 user_message += "\nPlease prioritize investigating the root cause of these alerts."
             
+            if trigger_context:
+                user_message += "\n\nTRIGGER CONTEXT (what the watcher observed):\n"
+                if trigger_context.get("trigger_reason"):
+                    user_message += f"- Trigger reason: {trigger_context['trigger_reason']}\n"
+                if trigger_context.get("observed_failures"):
+                    user_message += f"- Initial failure observations:\n"
+                    for obs in trigger_context["observed_failures"]:
+                        user_message += f"  • {obs}\n"
+                if trigger_context.get("transient_failures_detected"):
+                    user_message += f"- Transient failures were detected before this investigation.\n"
+                    user_message += f"  These issues may have self-healed. Please verify current state and note any recovery.\n"
+                if trigger_context.get("time_to_failure_seconds"):
+                    user_message += f"- Time from rollout start to failure: {trigger_context['time_to_failure_seconds']} seconds\n"
+                if trigger_context.get("failure_type"):
+                    user_message += f"- Failure type: {trigger_context['failure_type']}\n"
+            
             # Invoke the agent with the new format
             result = self._agent.invoke(
-                {"messages": [{"role": "user", "content": user_message}]}
+                {"messages": [{"role": "user", "content": user_message}]},
+                config={"callbacks": [ToolMetricsCallback()]}
             )
             
             # Extract the final message content and count iterations
@@ -196,8 +299,9 @@ class InvestigatorAgent:
                 output_text = "No response from agent"
             
             AGENT_INVESTIGATIONS.labels(status='success').inc()
+            summary = f"Follow-up for {deployment}" if question else f"Agent Investigation for {deployment}"
             return Analysis(
-                summary=f"Agent Investigation for {deployment}",
+                summary=summary,
                 likely_cause=output_text,
                 recommended_steps=["See detailed analysis above."],
                 severity="medium"

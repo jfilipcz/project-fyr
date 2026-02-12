@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Project Fyr{% endblock %}</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    {% block head %}{% endblock %}
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col">
+    <!-- Navigation -->
+    <nav class="bg-white shadow-sm sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-14">
+                <div class="flex">
+                    <a href="/" class="flex-shrink-0 flex items-center gap-2 mr-8">
+                        <img src="/static/favicon.png" alt="Fyr" class="h-7 w-7">
+                        <span class="text-lg font-bold text-gray-800 tracking-tight">Project Fyr</span>
+                    </a>
+                    <div class="hidden sm:flex sm:space-x-1">
+                        {% set nav_items = [
+                            ('overview', '/', 'Overview'),
+                            ('rollouts', '/rollouts', 'Rollouts'),
+                            ('investigate', '/investigate', 'Investigate'),
+                            ('alerts', '/alerts', 'Alerts'),
+                        ] %}
+                        {% for key, href, label in nav_items %}
+                        <a href="{{ href }}"
+                           class="inline-flex items-center px-3 pt-1 border-b-2 text-sm font-medium transition-colors duration-150
+                                  {% if active_nav == key %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %}">
+                            {{ label }}
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+                <!-- Mobile menu button -->
+                <div class="flex items-center sm:hidden">
+                    <button onclick="document.getElementById('mobileMenu').classList.toggle('hidden')"
+                            class="inline-flex items-center justify-center p-2 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 focus:outline-none">
+                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <!-- Mobile menu -->
+        <div id="mobileMenu" class="hidden sm:hidden border-t border-gray-200">
+            <div class="pt-2 pb-3 space-y-1">
+                {% for key, href, label in nav_items %}
+                <a href="{{ href }}"
+                   class="block pl-4 pr-4 py-2 border-l-4 text-base font-medium
+                          {% if active_nav == key %}border-indigo-500 text-indigo-700 bg-indigo-50{% else %}border-transparent text-gray-500 hover:bg-gray-50 hover:border-gray-300 hover:text-gray-700{% endif %}">
+                    {{ label }}
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+    </nav>
+
+    <!-- Toast notification container -->
+    <div id="toastContainer" class="fixed top-16 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <!-- Main content -->
+    <main class="flex-1">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Shared toast function -->
+    <script>
+    function showToast(message, type) {
+        type = type || 'info';
+        var container = document.getElementById('toastContainer');
+        var toast = document.createElement('div');
+        var colors = {
+            info: 'bg-indigo-600',
+            success: 'bg-green-600',
+            error: 'bg-red-600',
+            warning: 'bg-yellow-500 text-gray-900'
+        };
+        var colorClass = colors[type] || colors.info;
+        toast.className = 'pointer-events-auto max-w-sm px-4 py-3 rounded-lg shadow-lg text-white text-sm font-medium transform transition-all duration-300 translate-x-full opacity-0 ' + colorClass;
+        toast.textContent = message;
+        container.appendChild(toast);
+        requestAnimationFrame(function() {
+            toast.classList.remove('translate-x-full', 'opacity-0');
+        });
+        setTimeout(function() {
+            toast.classList.add('translate-x-full', 'opacity-0');
+            setTimeout(function() { toast.remove(); }, 300);
+        }, 3500);
+    }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

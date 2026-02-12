@@ -265,9 +265,12 @@ async def sso_callback(
         form_data = await request.form()
         id_token = form_data.get("id_token")
         state = form_data.get("state")
+        logger.debug(f"POST callback - form keys: {list(form_data.keys())}")
+    else:
+        logger.debug(f"GET callback - query params: {dict(request.query_params)}")
     
     if not id_token or not state:
-        logger.error("Missing id_token or state in SSO callback")
+        logger.error(f"Missing id_token or state in SSO callback. id_token present: {bool(id_token)}, state present: {bool(state)}")
         return RedirectResponse(url="/login?error=invalid_response", status_code=302)
     
     # Verify state (CSRF protection)

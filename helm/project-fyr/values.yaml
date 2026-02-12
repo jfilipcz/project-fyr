@@ -107,7 +107,7 @@ rbac:
 # Application configuration
 config:
   # Database connection string (SQLite for development, MySQL/PostgreSQL for production)
-  databaseUrl: sqlite:////data/project_fyr.db
+  databaseUrl: mysql+pymysql://projectfyr:changeme@project-fyr-mysql:3306/projectfyr
   # Name of your Kubernetes cluster (shown in Slack notifications)
   clusterName: my-cluster
   # Timeout in seconds before marking a rollout as failed
@@ -159,6 +159,8 @@ config:
   langchainModelName: gpt-4o-mini
   # Prometheus URL for metrics queries (optional)
   prometheusUrl: ""
+  # Show triage assignment block in Slack notifications
+  showTriageInSlack: false
 
 # Authentication configuration
 auth:
@@ -213,13 +215,19 @@ secrets:
   existingSecret: "fyr-auth-secrets"
 
 mysql:
-  enabled: false
-  architecture: standalone
-  auth:
-    rootPassword: ""
-    username: projectfyr
-    password: projectfyr
-    database: projectfyr
-  primary:
-    persistence:
-      enabled: false
+  enabled: true
+  database: projectfyr
+  user: projectfyr
+  password: "changeme"
+  rootPassword: "changeme-root"
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: ""  # Use default storage class
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 500m

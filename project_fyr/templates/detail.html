@@ -1,367 +1,203 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "_base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rollout #{{ rollout.id }} - Project Fyr</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: #f4f4f9;
-            color: #333;
-        }
+{% block title %}Rollout #{{ rollout.id }} - Project Fyr{% endblock %}
 
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-        }
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+    /* Markdown rendering inside analysis content */
+    .md-content h1, .md-content h2, .md-content h3 { margin-top: 1em; margin-bottom: 0.5em; font-weight: 600; color: #1f2937; }
+    .md-content h1 { font-size: 1.4em; border-bottom: 2px solid #e5e7eb; padding-bottom: 0.3em; }
+    .md-content h2 { font-size: 1.2em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.3em; }
+    .md-content h3 { font-size: 1.05em; }
+    .md-content p { margin: 0.6em 0; line-height: 1.7; }
+    .md-content ul, .md-content ol { margin: 0.6em 0; padding-left: 1.8em; }
+    .md-content li { margin: 0.3em 0; line-height: 1.6; }
+    .md-content code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 0.88em; color: #dc2626; }
+    .md-content pre { background: #1f2937; color: #f3f4f6; padding: 14px; border-radius: 6px; overflow-x: auto; margin: 1em 0; }
+    .md-content pre code { background: none; padding: 0; color: inherit; }
+    .md-content blockquote { border-left: 3px solid #6366f1; margin: 1em 0; padding: 0.5em 1em; background: #f9fafb; color: #4b5563; }
+    .md-content table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+    .md-content th, .md-content td { border: 1px solid #e5e7eb; padding: 8px 12px; text-align: left; }
+    .md-content th { background: #f3f4f6; font-weight: 600; }
+    .md-content tr:nth-child(even) { background: #f9fafb; }
+    .md-content a { color: #4f46e5; text-decoration: none; }
+    .md-content a:hover { text-decoration: underline; }
+    .md-content strong { font-weight: 600; }
+    .md-content hr { border: none; border-top: 1px solid #e5e7eb; margin: 1.5em 0; }
+</style>
+{% endblock %}
 
-        h1 {
-            margin-top: 0;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 15px;
-        }
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <!-- Breadcrumb -->
+    <nav class="mb-6 text-sm">
+        <a href="/rollouts" class="text-indigo-600 hover:text-indigo-800 transition-colors">&larr; Back to Rollouts</a>
+    </nav>
 
-        .meta {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 30px;
-        }
+    <!-- Header with status -->
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-gray-900">Rollout #{{ rollout.id }}</h1>
+        {% set status_colors = {
+            'success': 'bg-green-100 text-green-800',
+            'failed': 'bg-red-100 text-red-800',
+            'rolling_out': 'bg-blue-100 text-blue-800',
+            'pending': 'bg-yellow-100 text-yellow-800'
+        } %}
+        <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold {{ status_colors.get(rollout.status.value, 'bg-gray-100 text-gray-800') }}">
+            {{ rollout.status.value | replace('_', ' ') | upper }}
+        </span>
+    </div>
 
-        .meta-item {
-            background: #f8f9fa;
-            padding: 10px;
-            border-radius: 4px;
-        }
-
-        .meta-label {
-            font-size: 0.85em;
-            color: #666;
-            display: block;
-            margin-bottom: 4px;
-        }
-
-        .meta-value {
-            font-weight: 500;
-        }
-
-        .analysis-section {
-            margin-top: 30px;
-            border-top: 1px solid #eee;
-            padding-top: 20px;
-        }
-
-        .analysis-box {
-            background: #fff3cd;
-            border: 1px solid #ffeeba;
-            padding: 20px;
-            border-radius: 4px;
-            color: #856404;
-        }
-
-        .analysis-box h3 {
-            margin-top: 0;
-            color: #856404;
-            font-size: 1.3em;
-            margin-bottom: 15px;
-        }
-
-        .analysis-box h4 {
-            margin-top: 25px;
-            margin-bottom: 10px;
-            color: #856404;
-            font-size: 1.1em;
-            font-weight: 600;
-        }
-
-        .analysis-content {
-            background: white;
-            padding: 15px;
-            border-radius: 4px;
-            line-height: 1.7;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            color: #333;
-        }
-
-        .analysis-content p {
-            margin: 0 0 10px 0;
-        }
-
-        .severity-badge {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 0.9em;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-
-        .severity-low {
-            background: #d4edda;
-            color: #155724;
-        }
-
-        .severity-medium {
-            background: #fff3cd;
-            color: #856404;
-        }
-
-        .severity-high {
-            background: #f8d7da;
-            color: #721c24;
-        }
-
-        .severity-critical {
-            background: #721c24;
-            color: white;
-        }
-
-        .analysis-box ul {
-            margin: 10px 0;
-            padding-left: 20px;
-        }
-
-        .analysis-box li {
-            margin: 8px 0;
-            line-height: 1.6;
-        }
-
-        .triage-info {
-            background: white;
-            padding: 15px;
-            border-radius: 4px;
-            margin-top: 10px;
-        }
-
-        .triage-team {
-            font-weight: 600;
-            color: #856404;
-            font-size: 1.1em;
-        }
-
-        .triage-reason {
-            color: #666;
-            margin-top: 5px;
-        }
-
-        .back-link {
-            display: inline-block;
-            margin-bottom: 20px;
-            color: #666;
-        }
-
-        pre {
-            background: #2d2d2d;
-            color: #f8f8f2;
-            padding: 15px;
-            border-radius: 4px;
-            overflow-x: auto;
-        }
-
-        /* Markdown rendering styles */
-        .analysis-content h1, .analysis-content h2, .analysis-content h3 {
-            margin-top: 1em;
-            margin-bottom: 0.5em;
-            font-weight: 600;
-            color: #333;
-        }
-
-        .analysis-content h1 {
-            font-size: 1.5em;
-            border-bottom: 2px solid #856404;
-            padding-bottom: 0.3em;
-        }
-
-        .analysis-content h2 {
-            font-size: 1.3em;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 0.3em;
-        }
-
-        .analysis-content h3 {
-            font-size: 1.1em;
-        }
-
-        .analysis-content p {
-            margin: 0.8em 0;
-            line-height: 1.6;
-        }
-
-        .analysis-content ul, .analysis-content ol {
-            margin: 0.8em 0;
-            padding-left: 2em;
-        }
-
-        .analysis-content li {
-            margin: 0.4em 0;
-            line-height: 1.6;
-        }
-
-        .analysis-content code {
-            background: #f4f4f4;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9em;
-            color: #d63384;
-        }
-
-        .analysis-content pre {
-            background: #2d2d2d;
-            color: #f8f8f2;
-            padding: 15px;
-            border-radius: 5px;
-            overflow-x: auto;
-            margin: 1em 0;
-        }
-
-        .analysis-content pre code {
-            background: none;
-            padding: 0;
-            color: inherit;
-        }
-
-        .analysis-content blockquote {
-            border-left: 4px solid #856404;
-            margin: 1em 0;
-            padding-left: 1em;
-            color: #555;
-            font-style: italic;
-        }
-
-        .analysis-content table {
-            border-collapse: collapse;
-            width: 100%;
-            margin: 1em 0;
-        }
-
-        .analysis-content th, .analysis-content td {
-            border: 1px solid #ddd;
-            padding: 8px 12px;
-            text-align: left;
-        }
-
-        .analysis-content th {
-            background: #856404;
-            color: white;
-            font-weight: 600;
-        }
-
-        .analysis-content tr:nth-child(even) {
-            background: #f9f9f9;
-        }
-
-        .analysis-content strong {
-            font-weight: 600;
-            color: #333;
-        }
-
-        .analysis-content em {
-            font-style: italic;
-        }
-
-        .analysis-content hr {
-            border: none;
-            border-top: 2px solid #ddd;
-            margin: 2em 0;
-        }
-
-        .analysis-content a {
-            color: #856404;
-            text-decoration: none;
-        }
-
-        .analysis-content a:hover {
-            text-decoration: underline;
-        }
-    </style>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-</head>
-
-<body>
-    <div class="container">
-        <a href="/rollouts" class="back-link">&larr; Back to Rollouts</a>
-        <h1>Rollout #{{ rollout.id }}</h1>
-
-        <div class="meta">
-            <div class="meta-item">
-                <span class="meta-label">Cluster</span>
-                <span class="meta-value">{{ rollout.cluster }}</span>
+    <!-- Meta grid -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-gray-200">
+            {% set meta_items = [
+                ('Cluster', rollout.cluster),
+                ('Namespace', rollout.namespace),
+                ('Deployment', rollout.deployment),
+            ] %}
+            {% for label, value in meta_items %}
+            <div class="px-5 py-4">
+                <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">{{ label }}</p>
+                <p class="mt-1 text-sm font-medium text-gray-900 font-mono">{{ value }}</p>
             </div>
-            <div class="meta-item">
-                <span class="meta-label">Namespace</span>
-                <span class="meta-value">{{ rollout.namespace }}</span>
-            </div>
-            <div class="meta-item">
-                <span class="meta-label">Deployment</span>
-                <span class="meta-value">{{ rollout.deployment }}</span>
-            </div>
-            <div class="meta-item">
-                <span class="meta-label">Status</span>
-                <span class="meta-value">{{ rollout.status }}</span>
-            </div>
-            <div class="meta-item">
-                <span class="meta-label">Started At</span>
-                <span class="meta-value">{{ rollout.started_at }}</span>
-            </div>
-            <div class="meta-item">
-                <span class="meta-label">Team</span>
-                <span class="meta-value">{{ rollout.team or 'N/A' }}</span>
-            </div>
+            {% endfor %}
         </div>
+        <div class="border-t border-gray-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-gray-200">
+            <div class="px-5 py-4">
+                <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Started At</p>
+                <p class="mt-1 text-sm text-gray-900">{{ rollout.started_at or 'N/A' }}</p>
+            </div>
+            <div class="px-5 py-4">
+                <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Team</p>
+                <p class="mt-1 text-sm text-gray-900">{{ rollout.team or 'N/A' }}</p>
+            </div>
+            {% if rollout.metadata_json and (rollout.metadata_json.get('example.com/requestor-email') or rollout.metadata_json.get('requestor')) %}
+            <div class="px-5 py-4">
+                <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Requestor</p>
+                <p class="mt-1 text-sm text-gray-900">{{ rollout.metadata_json.get('example.com/requestor-email') or rollout.metadata_json.get('requestor') }}</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
 
-        {% if analysis %}
-        <div class="analysis-section">
-            <h2>Analysis</h2>
-            <div class="analysis-box">
-                <h4>Severity</h4>
-                <span class="severity-badge severity-{{ analysis.severity }}">{{ analysis.severity }}</span>
+    <!-- Analysis section -->
+    {% if analysis %}
+    {% set severity = analysis.severity | lower %}
+    {% set severity_styles = {
+        'low': 'border-l-green-500 bg-green-50',
+        'medium': 'border-l-yellow-500 bg-yellow-50',
+        'high': 'border-l-orange-500 bg-orange-50',
+        'critical': 'border-l-red-600 bg-red-50'
+    } %}
+    {% set severity_badge = {
+        'low': 'bg-green-100 text-green-800',
+        'medium': 'bg-yellow-100 text-yellow-800',
+        'high': 'bg-orange-100 text-orange-800',
+        'critical': 'bg-red-100 text-red-800'
+    } %}
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6 overflow-hidden border-l-4 {{ severity_styles.get(severity, 'border-l-gray-400 bg-gray-50') }}">
+        <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-gray-900">Analysis</h2>
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase {{ severity_badge.get(severity, 'bg-gray-100 text-gray-800') }}">
+                {{ analysis.severity }}
+            </span>
+        </div>
+        <div class="px-5 py-5 space-y-5">
+            <!-- Likely Cause -->
+            <div>
+                <h3 class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Likely Cause</h3>
+                <div class="md-content bg-white rounded-md p-4 border border-gray-200" id="likelyCause"></div>
+            </div>
 
-                <h4>Likely Cause</h4>
-                <div class="analysis-content" id="likelyCause"></div>
-
-                <h4>Recommended Steps</h4>
-                <ul>
+            <!-- Recommended Steps -->
+            <div>
+                <h3 class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Recommended Steps</h3>
+                <ol class="bg-white rounded-md p-4 border border-gray-200 space-y-2">
                     {% for step in analysis.recommended_steps %}
-                    <li>{{ step }}</li>
+                    <li class="flex items-start gap-2 text-sm text-gray-700">
+                        <span class="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-xs font-bold flex items-center justify-center mt-0.5">{{ loop.index }}</span>
+                        <span>{{ step }}</span>
+                    </li>
                     {% endfor %}
-                </ul>
+                </ol>
+            </div>
 
-                {% if analysis.triage_team %}
-                <h4>Triage Team</h4>
-                <div class="triage-info">
-                    <div class="triage-team">{{ analysis.triage_team }}</div>
-                    <div class="triage-reason">{{ analysis.triage_reason }}</div>
+            <!-- Triage Team -->
+            {% if analysis.triage_team %}
+            <div>
+                <h3 class="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">Triage Team</h3>
+                <div class="bg-white rounded-md p-4 border border-gray-200">
+                    <p class="font-semibold text-gray-900">{{ analysis.triage_team }}</p>
+                    {% if analysis.triage_reason %}
+                    <p class="text-sm text-gray-500 mt-1">{{ analysis.triage_reason }}</p>
+                    {% endif %}
                 </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% else %}
+    <!-- No analysis state -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+        <div class="px-5 py-4 border-b border-gray-200">
+            <h2 class="text-lg font-semibold text-gray-900">Analysis</h2>
+        </div>
+        <div class="px-5 py-8 text-center">
+            {% if rollout.analysis_status and rollout.analysis_status.value == 'DISCARDED' %}
+            <div class="text-gray-400 text-3xl mb-2">&#10003;</div>
+            <p class="text-sm text-gray-500">Analysis was skipped — deployment appeared healthy during investigation.</p>
+            {% elif rollout.analysis_status and rollout.analysis_status.value == 'PENDING' %}
+            <div class="flex items-center justify-center gap-2 text-indigo-600 mb-2">
+                <svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+            </div>
+            <p class="text-sm text-gray-500">Analysis is pending. Check back in a few moments.</p>
+            {% elif rollout.analysis_status and rollout.analysis_status.value == 'SPECULATIVE' %}
+            <div class="text-yellow-500 text-3xl mb-2">&#9679;</div>
+            <p class="text-sm text-gray-500">Analysis in progress (speculative — awaiting rollout confirmation).</p>
+            {% elif rollout.analysis_status and rollout.analysis_status.value == 'FAILED' %}
+            <div class="text-red-500 text-3xl mb-2">&#10007;</div>
+            <p class="text-sm text-gray-500">Analysis failed to complete for this rollout.</p>
+            {% else %}
+            <div class="text-gray-300 text-3xl mb-2">&#8212;</div>
+            <p class="text-sm text-gray-500">No analysis available for this rollout.</p>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Metadata as key-value table -->
+    {% if rollout.metadata_json %}
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div class="px-5 py-4 border-b border-gray-200">
+            <h2 class="text-lg font-semibold text-gray-900">Metadata</h2>
+        </div>
+        <div class="divide-y divide-gray-200">
+            {% for key, value in rollout.metadata_json.items() %}
+            <div class="px-5 py-3 flex flex-col sm:flex-row sm:items-start gap-1">
+                <span class="text-xs font-medium text-gray-500 uppercase tracking-wide sm:w-1/3 flex-shrink-0 break-all">{{ key }}</span>
+                {% if value is mapping or value is sequence and value is not string %}
+                <pre class="text-sm text-gray-900 sm:w-2/3 bg-gray-50 rounded p-2 overflow-x-auto text-xs font-mono">{{ value | tojson(indent=2) }}</pre>
+                {% else %}
+                <span class="text-sm text-gray-900 sm:w-2/3 break-all">{{ value }}</span>
                 {% endif %}
             </div>
+            {% endfor %}
         </div>
-        {% endif %}
-
-        {% if rollout.metadata_json %}
-        <div class="analysis-section">
-            <h2>Metadata</h2>
-            <pre>{{ rollout.metadata_json }}</pre>
-        </div>
-        {% endif %}
     </div>
-    
-    <script>
-        // Render Markdown content
-        {% if analysis %}
-        const likelyCauseContent = {{ analysis.likely_cause | tojson }};
-        document.getElementById('likelyCause').innerHTML = marked.parse(likelyCauseContent);
-        {% endif %}
-    </script>
-</body>
+    {% endif %}
+</div>
+{% endblock %}
 
-</html>
+{% block scripts %}
+<script>
+    {% if analysis %}
+    var likelyCauseContent = {{ analysis.likely_cause | tojson }};
+    document.getElementById('likelyCause').innerHTML = marked.parse(likelyCauseContent);
+    {% endif %}
+</script>
+{% endblock %}

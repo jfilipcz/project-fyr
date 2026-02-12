@@ -1,385 +1,222 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "_base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Fyr Dashboard</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: #f4f4f9;
-            color: #333;
-        }
+{% block title %}Rollouts - Project Fyr{% endblock %}
 
-        h1 {
-            margin-bottom: 20px;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-
-        th,
-        td {
-            padding: 12px 15px;
-            text-align: left;
-            border-bottom: 1px solid #eee;
-        }
-
-        th {
-            background-color: #f8f9fa;
-            font-weight: 600;
-        }
-
-        tr:hover {
-            background-color: #f1f1f1;
-        }
-
-        .status {
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.85em;
-            font-weight: 500;
-        }
-
-        .status-success {
-            background: #d4edda;
-            color: #155724;
-        }
-
-        .status-failed {
-            background: #f8d7da;
-            color: #721c24;
-        }
-
-        .status-rolling-out {
-            background: #cce5ff;
-            color: #004085;
-        }
-
-        .status-pending {
-            background: #fff3cd;
-            color: #856404;
-        }
-
-        a {
-            text-decoration: none;
-            color: #007bff;
-        }
-
-        a:hover {
-            text-decoration: underline;
-        }
-
-        .filter-buttons {
-            margin-bottom: 20px;
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-
-        .filter-btn {
-            padding: 8px 16px;
-            border-radius: 4px;
-            border: 2px solid #dee2e6;
-            background: white;
-            color: #495057;
-            cursor: pointer;
-            font-weight: 500;
-            text-decoration: none;
-            display: inline-block;
-            transition: all 0.2s;
-        }
-
-        .filter-btn:hover {
-            background: #f8f9fa;
-            text-decoration: none;
-            border-color: #adb5bd;
-        }
-
-        .filter-btn.active {
-            background: #007bff;
-            color: white;
-            border-color: #007bff;
-        }
-
-        .new-investigation-btn {
-            background: #28a745;
-            color: white;
-            padding: 10px 15px;
-            border-radius: 4px;
-            text-decoration: none;
-            font-weight: 600;
-            border: 2px solid #28a745;
-        }
-
-        .new-investigation-btn:hover {
-            background: #218838;
-            border-color: #218838;
-            text-decoration: none;
-        }
-
-        .search-box {
-            padding: 8px 12px;
-            border: 2px solid #dee2e6;
-            border-radius: 4px;
-            font-size: 14px;
-            width: 250px;
-            transition: border-color 0.2s;
-        }
-
-        .search-box:focus {
-            outline: none;
-            border-color: #007bff;
-        }
-
-        .search-form {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        .search-btn {
-            padding: 8px 16px;
-            background: #007bff;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: 500;
-            transition: background 0.2s;
-        }
-
-        .search-btn:hover {
-            background: #0056b3;
-        }
-
-        .clear-btn {
-            padding: 8px 12px;
-            background: #6c757d;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            text-decoration: none;
-            display: inline-block;
-        }
-
-        .clear-btn:hover {
-            background: #5a6268;
-            text-decoration: none;
-        }
-
-        .loading-banner {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 15px 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-weight: 500;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-        }
-
-        .loading-banner.hidden {
-            display: none;
-        }
-
-        .spinner {
-            border: 3px solid rgba(255, 255, 255, 0.3);
-            border-radius: 50%;
-            border-top: 3px solid white;
-            width: 20px;
-            height: 20px;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: #6c757d;
-        }
-
-        .empty-state-icon {
-            font-size: 48px;
-            margin-bottom: 16px;
-        }
-    </style>
-</head>
-
-<body>
-    <h1>Project Fyr Rollouts</h1>
-    
-    <div id="loadingBanner" class="loading-banner">
-        <div class="spinner"></div>
-        <span>Loading rollouts from database...</span>
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <!-- Loading skeleton -->
+    <div id="loadingBanner" class="mb-6 bg-indigo-600 text-white px-5 py-3 rounded-lg shadow flex items-center gap-3">
+        <svg class="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <span class="text-sm font-medium">Loading rollouts from database...</span>
     </div>
-    <div class="filter-buttons">
-        <a href="/" class="filter-btn"
-            style="background-color: #6366f1; color: white; border-color: #6366f1;">&larr; Back to Overview</a>
-        <span style="border-right: 1px solid #ccc; margin: 0 10px; height: 30px;"></span>
-        <a href="/rollouts" class="filter-btn {% if not current_status %}active{% endif %}">All</a>
-        <a href="/rollouts?status=failed{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
-            class="filter-btn {% if current_status == 'failed' %}active{% endif %}">Failed</a>
-        <a href="/rollouts?status=success{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
-            class="filter-btn {% if current_status == 'success' %}active{% endif %}">Success</a>
-        <a href="/rollouts?status=rolling_out{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
-            class="filter-btn {% if current_status == 'rolling_out' %}active{% endif %}">Rolling Out</a>
-        <a href="/rollouts?status=pending{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}"
-            class="filter-btn {% if current_status == 'pending' %}active{% endif %}">Pending</a>
-        <span style="flex-grow: 1;"></span>
-        <form method="get" action="/rollouts" class="search-form">
-            <input type="text" name="namespace" placeholder="Search by namespace..."
-                value="{{ current_namespace or '' }}" class="search-box">
-            {% if current_status %}
-            <input type="hidden" name="status" value="{{ current_status }}">
-            {% endif %}
-            <button type="submit" class="search-btn">Search</button>
-            {% if current_namespace %}
-            <a href="/rollouts?{% if current_status %}status={{ current_status }}{% endif %}" class="clear-btn">Clear</a>
-            {% endif %}
-        </form>
-        <span style="color: #6c757d; margin: 0 15px;">
-            Showing {{ rollouts|length }} rollout{% if rollouts|length != 1 %}s{% endif %}
-            {% if current_status %} ({{ current_status|upper }}){% endif %}
-            {% if current_namespace %} in <strong>{{ current_namespace }}</strong>{% endif %}
-        </span>
-        <a href="/investigate" class="new-investigation-btn">+ New Investigation</a>
+
+    <!-- Filters toolbar -->
+    <div class="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div class="flex flex-col lg:flex-row lg:items-center gap-4">
+            <!-- Status filters -->
+            <div class="flex flex-wrap gap-2">
+                <a href="/rollouts"
+                   class="px-3 py-1.5 text-sm font-medium rounded-md border transition-colors
+                          {% if not current_status %}bg-indigo-600 text-white border-indigo-600{% else %}bg-white text-gray-700 border-gray-300 hover:bg-gray-50{% endif %}">
+                    All
+                </a>
+                {% for s_val, s_label, s_color in [('failed', 'Failed', 'red'), ('success', 'Success', 'green'), ('rolling_out', 'Rolling Out', 'blue'), ('pending', 'Pending', 'yellow')] %}
+                <a href="/rollouts?status={{ s_val }}{% if current_namespace %}&namespace={{ current_namespace }}{% endif %}{% if current_requestor %}&requestor={{ current_requestor }}{% endif %}"
+                   class="px-3 py-1.5 text-sm font-medium rounded-md border transition-colors
+                          {% if current_status == s_val %}bg-{{ s_color }}-600 text-white border-{{ s_color }}-600{% else %}bg-white text-gray-700 border-gray-300 hover:bg-gray-50{% endif %}">
+                    {{ s_label }}
+                </a>
+                {% endfor %}
+            </div>
+
+            <!-- Search form -->
+            <form method="get" action="/rollouts" class="flex flex-1 flex-wrap gap-2 lg:justify-end">
+                <input type="text" name="namespace" placeholder="Namespace..."
+                       value="{{ current_namespace or '' }}"
+                       class="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-44">
+                <input type="text" name="requestor" placeholder="Requestor email..."
+                       value="{{ current_requestor or '' }}"
+                       class="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 w-52">
+                {% if current_status %}
+                <input type="hidden" name="status" value="{{ current_status }}">
+                {% endif %}
+                <button type="submit" class="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors">
+                    Search
+                </button>
+                {% if current_namespace or current_requestor %}
+                <a href="/rollouts{% if current_status %}?status={{ current_status }}{% endif %}"
+                   class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors">
+                    Clear
+                </a>
+                {% endif %}
+            </form>
+        </div>
     </div>
-    <table id="rolloutsTable">
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Cluster</th>
-                <th>Namespace</th>
-                <th>Deployment</th>
-                <th>Status</th>
-                <th>Started At</th>
-                <th>Team</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody id="rolloutsBody">
-            <tr>
-                <td colspan="8" style="text-align: center; padding: 40px;">Loading...</td>
-            </tr>
-        </tbody>
-    </table>
-    
-    <script>
-        // Get URL parameters
-        const urlParams = new URLSearchParams(window.location.search);
-        const currentStatus = '{{ current_status or "" }}';
-        const currentNamespace = '{{ current_namespace or "" }}';
 
-        function getStatusClass(status) {
-            return 'status-' + status.toLowerCase().replace('_', '-');
-        }
+    <!-- Results info + New Investigation button -->
+    <div class="flex items-center justify-between mb-4">
+        <p id="resultsCount" class="text-sm text-gray-500">Loading...</p>
+        <a href="/investigate"
+           class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors shadow-sm">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            New Investigation
+        </a>
+    </div>
 
-        function formatDate(isoString) {
-            if (!isoString) return '-';
-            const date = new Date(isoString);
-            return date.toLocaleString();
-        }
-
-        async function loadRollouts() {
-            const banner = document.getElementById('loadingBanner');
-            const tbody = document.getElementById('rolloutsBody');
-            const countSpan = document.querySelector('.filter-buttons span[style*="color"]');
-            
-            try {
-                // Build query parameters
-                const params = new URLSearchParams();
-                if (currentStatus) params.append('status', currentStatus);
-                if (currentNamespace) params.append('namespace', currentNamespace);
-                
-                const response = await fetch(`/api/rollouts?${params.toString()}`);
-                if (!response.ok) {
-                    throw new Error(`Failed to load: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
-                const rollouts = data.rollouts;
-                
-                // Update count display
-                if (countSpan) {
-                    const plural = rollouts.length !== 1 ? 's' : '';
-                    const statusText = currentStatus ? ` (${currentStatus.toUpperCase()})` : '';
-                    const namespaceText = currentNamespace ? ` in <strong>${currentNamespace}</strong>` : '';
-                    countSpan.innerHTML = `Showing ${rollouts.length} rollout${plural}${statusText}${namespaceText}`;
-                }
-                
-                // Clear tbody
-                tbody.innerHTML = '';
-                
-                if (rollouts.length === 0) {
-                    tbody.innerHTML = `
-                        <tr>
-                            <td colspan="8">
-                                <div class="empty-state">
-                                    <div class="empty-state-icon">📭</div>
-                                    <div>No rollouts found</div>
-                                </div>
-                            </td>
-                        </tr>
-                    `;
-                } else {
-                    rollouts.forEach(rollout => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td>${rollout.id}</td>
-                            <td>${rollout.cluster}</td>
-                            <td>${rollout.namespace}</td>
-                            <td>${rollout.deployment}</td>
-                            <td>
-                                <span class="status ${getStatusClass(rollout.status)}">
-                                    ${rollout.status}
-                                </span>
-                            </td>
-                            <td>${formatDate(rollout.started_at)}</td>
-                            <td>${rollout.team || '-'}</td>
-                            <td><a href="/rollout/${rollout.id}">View Details</a></td>
-                        `;
-                        tbody.appendChild(row);
-                    });
-                }
-                
-                // Hide banner
-                banner.classList.add('hidden');
-                
-            } catch (e) {
-                banner.style.background = '#dc3545';
-                banner.innerHTML = `<span>⚠️ Failed to load rollouts: ${e.message}</span>`;
-                tbody.innerHTML = `
+    <!-- Table -->
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
                     <tr>
-                        <td colspan="8" style="text-align: center; padding: 40px; color: #dc3545;">
-                            Failed to load rollouts. Please refresh the page.
-                        </td>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cluster</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Namespace</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Deployment</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Started At</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Team</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                     </tr>
-                `;
-            }
-        }
+                </thead>
+                <tbody id="rolloutsBody" class="bg-white divide-y divide-gray-200">
+                    <!-- Skeleton rows -->
+                    {% for i in range(5) %}
+                    <tr class="skeleton-row animate-pulse">
+                        <td class="px-4 py-3"><div class="h-4 bg-gray-200 rounded w-10"></div></td>
+                        <td class="px-4 py-3"><div class="h-4 bg-gray-200 rounded w-24"></div></td>
+                        <td class="px-4 py-3"><div class="h-4 bg-gray-200 rounded w-32"></div></td>
+                        <td class="px-4 py-3"><div class="h-4 bg-gray-200 rounded w-28"></div></td>
+                        <td class="px-4 py-3"><div class="h-4 bg-gray-200 rounded w-16"></div></td>
+                        <td class="px-4 py-3"><div class="h-4 bg-gray-200 rounded w-36"></div></td>
+                        <td class="px-4 py-3"><div class="h-4 bg-gray-200 rounded w-20"></div></td>
+                        <td class="px-4 py-3"><div class="h-4 bg-gray-200 rounded w-14"></div></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
 
-        // Load data when page loads
-        window.addEventListener('DOMContentLoaded', loadRollouts);
-    </script>
-</body>
+    <!-- Pagination -->
+    <div id="pagination" class="hidden mt-4 flex items-center justify-between">
+        <p id="paginationInfo" class="text-sm text-gray-500"></p>
+        <div class="flex gap-2">
+            <button id="prevBtn" onclick="changePage(-1)" disabled
+                    class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                &larr; Previous
+            </button>
+            <button id="nextBtn" onclick="changePage(1)"
+                    class="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                Next &rarr;
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
 
-</html>
+{% block scripts %}
+<script>
+    var currentStatus = '{{ current_status or "" }}';
+    var currentNamespace = '{{ current_namespace or "" }}';
+    var currentRequestor = '{{ current_requestor or "" }}';
+    var currentOffset = 0;
+    var pageSize = 50;
+    var totalCount = 0;
+
+    var statusBadge = {
+        success:     'bg-green-100 text-green-800',
+        failed:      'bg-red-100 text-red-800',
+        rolling_out: 'bg-blue-100 text-blue-800',
+        pending:     'bg-yellow-100 text-yellow-800'
+    };
+
+    function formatDate(iso) {
+        if (!iso) return '<span class="text-gray-400">-</span>';
+        return new Date(iso).toLocaleString();
+    }
+
+    function changePage(dir) {
+        currentOffset += dir * pageSize;
+        if (currentOffset < 0) currentOffset = 0;
+        loadRollouts();
+    }
+
+    function loadRollouts() {
+        var banner = document.getElementById('loadingBanner');
+        var tbody = document.getElementById('rolloutsBody');
+        var countEl = document.getElementById('resultsCount');
+        var pagination = document.getElementById('pagination');
+
+        var params = new URLSearchParams();
+        if (currentStatus) params.append('status', currentStatus);
+        if (currentNamespace) params.append('namespace', currentNamespace);
+        if (currentRequestor) params.append('requestor', currentRequestor);
+        params.append('offset', currentOffset);
+        params.append('limit', pageSize);
+
+        fetch('/api/rollouts?' + params.toString())
+            .then(function(r) {
+                if (!r.ok) throw new Error(r.statusText);
+                return r.json();
+            })
+            .then(function(data) {
+                var rollouts = data.rollouts;
+                totalCount = data.total || rollouts.length;
+                banner.classList.add('hidden');
+
+                // Update count
+                var statusText = currentStatus ? ' (' + currentStatus.toUpperCase() + ')' : '';
+                var nsText = currentNamespace ? ' in <strong>' + currentNamespace + '</strong>' : '';
+                var reqText = currentRequestor ? ' for <strong>' + currentRequestor + '</strong>' : '';
+                countEl.innerHTML = 'Showing ' + rollouts.length + ' of ' + totalCount + ' rollout' + (totalCount !== 1 ? 's' : '') + statusText + nsText + reqText;
+
+                tbody.innerHTML = '';
+
+                if (rollouts.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-16 text-center text-gray-500"><div class="text-4xl mb-3">&#128237;</div><p class="text-sm">No rollouts found</p></td></tr>';
+                    pagination.classList.add('hidden');
+                    return;
+                }
+
+                rollouts.forEach(function(r) {
+                    var badgeClass = statusBadge[r.status] || 'bg-gray-100 text-gray-800';
+                    var row = document.createElement('tr');
+                    row.className = 'hover:bg-gray-50 transition-colors';
+                    row.innerHTML =
+                        '<td class="px-4 py-3 text-sm font-medium text-gray-900">' + r.id + '</td>' +
+                        '<td class="px-4 py-3 text-sm text-gray-600">' + r.cluster + '</td>' +
+                        '<td class="px-4 py-3 text-sm text-gray-600 font-mono text-xs">' + r.namespace + '</td>' +
+                        '<td class="px-4 py-3 text-sm text-gray-600">' + r.deployment + '</td>' +
+                        '<td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ' + badgeClass + '">' + r.status.replace('_', ' ') + '</span></td>' +
+                        '<td class="px-4 py-3 text-sm text-gray-500">' + formatDate(r.started_at) + '</td>' +
+                        '<td class="px-4 py-3 text-sm text-gray-600">' + (r.team || '<span class="text-gray-400">-</span>') + '</td>' +
+                        '<td class="px-4 py-3"><a href="/rollout/' + r.id + '" class="text-indigo-600 hover:text-indigo-900 text-sm font-medium">View</a></td>';
+                    tbody.appendChild(row);
+                });
+
+                // Update pagination
+                if (totalCount > pageSize) {
+                    pagination.classList.remove('hidden');
+                    document.getElementById('prevBtn').disabled = (currentOffset === 0);
+                    document.getElementById('nextBtn').disabled = (currentOffset + pageSize >= totalCount);
+                    var from = currentOffset + 1;
+                    var to = Math.min(currentOffset + pageSize, totalCount);
+                    document.getElementById('paginationInfo').textContent = from + '-' + to + ' of ' + totalCount;
+                } else {
+                    pagination.classList.add('hidden');
+                }
+            })
+            .catch(function(err) {
+                banner.className = 'mb-6 bg-red-600 text-white px-5 py-3 rounded-lg shadow flex items-center gap-3';
+                banner.innerHTML = '<span class="text-sm font-medium">Failed to load rollouts: ' + err.message + '. <button onclick="loadRollouts()" class="underline ml-1">Retry</button></span>';
+                tbody.innerHTML = '';
+            });
+    }
+
+    window.addEventListener('DOMContentLoaded', loadRollouts);
+</script>
+{% endblock %}

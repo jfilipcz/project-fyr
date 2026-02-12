@@ -33,7 +33,7 @@ class Rollout(Base):
     metadata_json: Mapped[Optional[dict]] = mapped_column("metadata", JSON, default=dict)
     analysis_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     analysis_status: Mapped[AnalysisStatus] = mapped_column(
-        SAEnum(AnalysisStatus), default=AnalysisStatus.PENDING
+        SAEnum(AnalysisStatus), default=AnalysisStatus.NOT_NEEDED
     )
     notify_status: Mapped[NotifyStatus] = mapped_column(
         SAEnum(NotifyStatus), default=NotifyStatus.PENDING
@@ -192,10 +192,43 @@ class RolloutRepo:
             return list(s.scalars(stmt))
 
     def list_failed(self, cluster: str) -> list[Rollout]:
+        """List FAILED rollouts that need analysis (PENDING only, not DISCARDED)."""
         stmt = select(Rollout).where(
             Rollout.cluster == cluster,
             Rollout.status == RolloutStatus.FAILED,
-            Rollout.analysis_status != AnalysisStatus.DONE,
+            Rollout.analysis_status == AnalysisStatus.PENDING,
+        ).order_by(Rollout.id.asc())  # FIFO order
+        with self.session() as s:
+            return list(s.scalars(stmt))
+    
+    def list_for_speculative_analysis(self, cluster: str, grace_seconds: int) -> list[Rollout]:
+        """Find ROLLING_OUT rollouts past grace period that haven't been analyzed yet."""
+        threshold_time = datetime.utcnow() - timedelta(seconds=grace_seconds)
+        stmt = select(Rollout).where(
+            Rollout.cluster == cluster,
+            Rollout.status == RolloutStatus.ROLLING_OUT,
+            Rollout.started_at < threshold_time,
+            Rollout.analysis_status == AnalysisStatus.NOT_NEEDED,
+        ).order_by(Rollout.id.asc())  # FIFO order
+        with self.session() as s:
+            return list(s.scalars(stmt))
+    
+    def list_speculative_now_failed(self, cluster: str) -> list[Rollout]:
+        """Find rollouts with speculative analysis that are now FAILED (ready for notification)."""
+        stmt = select(Rollout).where(
+            Rollout.cluster == cluster,
+            Rollout.status == RolloutStatus.FAILED,
+            Rollout.analysis_status == AnalysisStatus.SPECULATIVE,
+        ).order_by(Rollout.id.asc())
+        with self.session() as s:
+            return list(s.scalars(stmt))
+    
+    def list_speculative_now_success(self, cluster: str) -> list[Rollout]:
+        """Find rollouts with speculative analysis that succeeded (should discard analysis)."""
+        stmt = select(Rollout).where(
+            Rollout.cluster == cluster,
+            Rollout.status == RolloutStatus.SUCCESS,
+            Rollout.analysis_status == AnalysisStatus.SPECULATIVE,
         )
         with self.session() as s:
             return list(s.scalars(stmt))
@@ -208,20 +241,34 @@ class RolloutRepo:
             Rollout.cluster == cluster,
             Rollout.status == RolloutStatus.PENDING,
             Rollout.started_at < threshold_time,
-            Rollout.analysis_status != AnalysisStatus.DONE,
-        )
+            Rollout.analysis_status.in_([AnalysisStatus.NOT_NEEDED, AnalysisStatus.PENDING]),
+        ).order_by(Rollout.id.asc())
         with self.session() as s:
             return list(s.scalars(stmt))
 
-    def list_recent(self, limit: int = 50, exclude_system: bool = True) -> list[Rollout]:
+    def list_recent(
+        self,
+        limit: int = 50,
+        exclude_system: bool = True,
+        requestor: Optional[str] = None,
+        offset: int = 0,
+    ) -> list[Rollout]:
         stmt = select(Rollout)
         if exclude_system:
             stmt = stmt.where(Rollout.namespace.notin_(settings.system_namespaces))
-        stmt = stmt.order_by(Rollout.id.desc()).limit(limit)
+        stmt = self._apply_requestor_filter(stmt, requestor)
+        stmt = stmt.order_by(Rollout.id.desc()).offset(offset).limit(limit)
         with self.session() as s:
             return list(s.scalars(stmt))
 
-    def list_by_status(self, status: str, limit: int = 50, exclude_system: bool = True) -> list[Rollout]:
+    def list_by_status(
+        self,
+        status: str,
+        limit: int = 50,
+        exclude_system: bool = True,
+        requestor: Optional[str] = None,
+        offset: int = 0,
+    ) -> list[Rollout]:
         """List rollouts filtered by status."""
         # Convert string to RolloutStatus enum
         try:
@@ -235,15 +282,23 @@ class RolloutRepo:
         )
         if exclude_system:
             stmt = stmt.where(Rollout.namespace.notin_(settings.system_namespaces))
-        stmt = stmt.order_by(Rollout.id.desc()).limit(limit)
+        stmt = self._apply_requestor_filter(stmt, requestor)
+        stmt = stmt.order_by(Rollout.id.desc()).offset(offset).limit(limit)
         with self.session() as s:
             return list(s.scalars(stmt))
 
-    def list_by_namespace(self, namespace: str, limit: int = 50) -> list[Rollout]:
+    def list_by_namespace(
+        self,
+        namespace: str,
+        limit: int = 50,
+        requestor: Optional[str] = None,
+        offset: int = 0,
+    ) -> list[Rollout]:
         """List rollouts filtered by namespace."""
         stmt = select(Rollout).where(
             Rollout.namespace == namespace
-        ).order_by(Rollout.id.desc()).limit(limit)
+        ).order_by(Rollout.id.desc()).offset(offset).limit(limit)
+        stmt = self._apply_requestor_filter(stmt, requestor)
         with self.session() as s:
             return list(s.scalars(stmt))
 
@@ -308,7 +363,14 @@ class RolloutRepo:
             # Convert to list of tuples for easier consumption
             return [(r.Rollout, r.AnalysisRecord) for r in results]
 
-    def list_by_status_and_namespace(self, status: str, namespace: str, limit: int = 50) -> list[Rollout]:
+    def list_by_status_and_namespace(
+        self,
+        status: str,
+        namespace: str,
+        limit: int = 50,
+        requestor: Optional[str] = None,
+        offset: int = 0,
+    ) -> list[Rollout]:
         """List rollouts filtered by both status and namespace."""
         try:
             status_enum = RolloutStatus[status.upper()]
@@ -318,9 +380,40 @@ class RolloutRepo:
         stmt = select(Rollout).where(
             Rollout.status == status_enum,
             Rollout.namespace == namespace
-        ).order_by(Rollout.id.desc()).limit(limit)
+        ).order_by(Rollout.id.desc()).offset(offset).limit(limit)
+        stmt = self._apply_requestor_filter(stmt, requestor)
         with self.session() as s:
             return list(s.scalars(stmt))
+
+    def count_rollouts(
+        self,
+        status: Optional[str] = None,
+        namespace: Optional[str] = None,
+        requestor: Optional[str] = None,
+        exclude_system: bool = True,
+    ) -> int:
+        """Count total rollouts matching filters (for pagination)."""
+        stmt = select(func.count(Rollout.id))
+        if status:
+            try:
+                status_enum = RolloutStatus[status.upper()]
+                stmt = stmt.where(Rollout.status == status_enum)
+            except (KeyError, AttributeError):
+                return 0
+        if namespace:
+            stmt = stmt.where(Rollout.namespace == namespace)
+        if exclude_system:
+            stmt = stmt.where(Rollout.namespace.notin_(settings.system_namespaces))
+        stmt = self._apply_requestor_filter(stmt, requestor)
+        with self.session() as s:
+            return s.scalar(stmt) or 0
+
+    def _apply_requestor_filter(self, stmt, requestor: Optional[str]):
+        if not requestor:
+            return stmt
+        return stmt.where(
+            Rollout.metadata_json["example.com/requestor-email"].as_string() == requestor
+        )
 
     def get_by_id(self, rollout_id: int) -> Optional[Rollout]:
         stmt = select(Rollout).where(Rollout.id == rollout_id)
@@ -342,6 +435,76 @@ class RolloutRepo:
             s.execute(stmt)
             s.commit()
 
+    def queue_for_analysis(self, rollout_id: int) -> None:
+        """Mark rollout as needing analysis (analysis_status=PENDING)."""
+        stmt = (
+            update(Rollout)
+            .where(Rollout.id == rollout_id)
+            .values(analysis_status=AnalysisStatus.PENDING)
+        )
+        with self.session() as s:
+            s.execute(stmt)
+            s.commit()
+
+    def mark_speculative(self, rollout_id: int) -> None:
+        """Mark rollout as having speculative analysis in progress."""
+        stmt = (
+            update(Rollout)
+            .where(Rollout.id == rollout_id)
+            .values(analysis_status=AnalysisStatus.SPECULATIVE)
+        )
+        with self.session() as s:
+            s.execute(stmt)
+            s.commit()
+
+    def discard_speculative(self, rollout_id: int) -> None:
+        """Discard speculative analysis (rollout succeeded)."""
+        stmt = (
+            update(Rollout)
+            .where(Rollout.id == rollout_id)
+            .values(
+                analysis_status=AnalysisStatus.DISCARDED,
+                notify_status=NotifyStatus.SENT,  # Don't notify for successful rollouts
+            )
+        )
+        with self.session() as s:
+            s.execute(stmt)
+            s.commit()
+
+    def discard_analysis(self, rollout_id: int, reason: str | None = None) -> None:
+        """Discard analysis for a rollout and prevent notifications."""
+        with self.session() as s:
+            rollout = s.get(Rollout, rollout_id)
+            if not rollout:
+                return
+
+            metadata = dict(rollout.metadata_json or {})
+            if reason:
+                metadata["discard_reason"] = reason
+
+            stmt = (
+                update(Rollout)
+                .where(Rollout.id == rollout_id)
+                .values(
+                    analysis_status=AnalysisStatus.DISCARDED,
+                    notify_status=NotifyStatus.FAILED,
+                    metadata_json=metadata,
+                )
+            )
+            s.execute(stmt)
+            s.commit()
+
+    def promote_speculative(self, rollout_id: int) -> None:
+        """Promote speculative analysis to DONE (rollout confirmed failed, ready for notification)."""
+        stmt = (
+            update(Rollout)
+            .where(Rollout.id == rollout_id)
+            .values(analysis_status=AnalysisStatus.DONE)
+        )
+        with self.session() as s:
+            s.execute(stmt)
+            s.commit()
+
     def update_notify_status(self, rollout_id: int, new_status: NotifyStatus) -> None:
         stmt = update(Rollout).where(Rollout.id == rollout_id).values(notify_status=new_status)
         with self.session() as s:
@@ -356,7 +519,14 @@ class RolloutRepo:
         analysis: Analysis,
         model_name: str,
         prompt_version: str = "v1",
+        speculative: bool = False,
     ) -> None:
+        """Save analysis results.
+        
+        Args:
+            speculative: If True, sets analysis_status to SPECULATIVE instead of DONE.
+                        This allows holding notification until rollout status is confirmed.
+        """
         with self.session() as s:
             record = AnalysisRecord(
                 rollout_id=rollout_id,
@@ -367,17 +537,65 @@ class RolloutRepo:
             )
             s.add(record)
             s.flush()
+            
+            new_status = AnalysisStatus.SPECULATIVE if speculative else AnalysisStatus.DONE
             status_stmt = (
                 update(Rollout)
                 .where(Rollout.id == rollout_id)
                 .values(
                     analysis_id=record.id,
-                    analysis_status=AnalysisStatus.DONE,
-                    completed_at=analysis.created_at,
+                    analysis_status=new_status,
+                    completed_at=analysis.created_at if not speculative else None,
                 )
             )
             s.execute(status_stmt)
             s.commit()
+
+    def append_trigger_context(
+        self,
+        rollout_id: int,
+        trigger_reason: str,
+        failure_observations: list[str],
+        *,
+        is_transient: bool = False,
+        time_to_failure_seconds: int | None = None,
+        failure_type: str | None = None,
+    ) -> None:
+        """Append trigger context to rollout metadata for investigation enrichment."""
+        with self.session() as s:
+            rollout = s.get(Rollout, rollout_id)
+            if not rollout:
+                return
+            
+            metadata = dict(rollout.metadata_json or {})
+            trigger_context = metadata.get("trigger_context", {})
+            
+            # Set or update trigger reason
+            trigger_context["trigger_reason"] = trigger_reason
+            
+            # Append to observed failures (keeping history)
+            existing_failures = trigger_context.get("observed_failures", [])
+            for obs in failure_observations:
+                if obs not in existing_failures:
+                    existing_failures.append(obs)
+            trigger_context["observed_failures"] = existing_failures[-10:]  # Keep last 10
+            
+            # Track transient failures
+            if is_transient:
+                trigger_context["transient_failures_detected"] = True
+            
+            if time_to_failure_seconds is not None:
+                trigger_context["time_to_failure_seconds"] = time_to_failure_seconds
+            
+            if failure_type is not None:
+                trigger_context["failure_type"] = failure_type
+            
+            metadata["trigger_context"] = trigger_context
+            
+            stmt = update(Rollout).where(Rollout.id == rollout_id).values(metadata_json=metadata)
+            s.execute(stmt)
+            s.commit()
+
     def update_metadata(
         self,
         rollout_id: int,
@@ -734,6 +952,3 @@ class NamespaceIncidentRepo:
             incident_count = len(list(s.scalars(incident_stmt)))
             
             return rollout_count + incident_count
-
-
-

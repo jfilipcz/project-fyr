@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional, List, Dict, Any
 from .models import Analysis
 from .config import settings
+
+# Slack block text limits
+SLACK_TEXT_MAX_LENGTH = 2900  # Leave some buffer from the 3000 limit
+
+
+def _truncate_text(text: str, max_length: int = SLACK_TEXT_MAX_LENGTH) -> str:
+    """Truncate text to fit Slack's block text limit."""
+    if len(text) <= max_length:
+        return text
+    # Truncate and add ellipsis indicator
+    return text[:max_length - 50] + "\n\n_...truncated (too long for Slack)_"
 
 
 def _get_severity_emoji(severity: str) -> str:
@@ -22,6 +34,87 @@ def _get_dashboard_url(path: str) -> str:
     """Build full dashboard URL."""
     base = settings.dashboard_base_url or "http://localhost:8000"
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _markdown_to_slack(text: str) -> str:
+    """
+    Convert standard Markdown to Slack mrkdwn format.
+    
+    Conversions:
+    - ## Headers → *Bold Headers*
+    - ### Sub-headers → *Bold Sub-headers*
+    - **bold** → *bold* (Slack format)
+    - Fix malformed bold syntax (spaces, mixed asterisks)
+    - `code` → `code` (same)
+    - ```code blocks``` → ```code blocks``` (same)
+    - Remove excessive line breaks
+    
+    Slack mrkdwn rules:
+    - Asterisks must be directly adjacent to text (no spaces)
+    - Only single asterisks for bold (not double)
+    """
+    if not text:
+        return text
+    
+    # First, protect code blocks from modification
+    # Extract code blocks temporarily
+    code_blocks = []
+    def save_code_block(match):
+        code_blocks.append(match.group(0))
+        return f"__CODE_BLOCK_{len(code_blocks)-1}__"
+    
+    text = re.sub(r'```[\s\S]*?```', save_code_block, text)
+    
+    # Protect inline code
+    inline_codes = []
+    def save_inline_code(match):
+        inline_codes.append(match.group(0))
+        return f"__INLINE_CODE_{len(inline_codes)-1}__"
+    
+    text = re.sub(r'`[^`]+`', save_inline_code, text)
+    
+    # Convert ## headers to bold with newline
+    text = re.sub(r'^## (.+)$', r'*\1*', text, flags=re.MULTILINE)
+    
+    # Convert ### sub-headers to bold
+    text = re.sub(r'^### (.+)$', r'*\1*', text, flags=re.MULTILINE)
+    
+    # Convert **bold** to *bold* (Slack format) - but be careful with multiple on same line
+    text = re.sub(r'\*\*([^*]+?)\*\*', r'*\1*', text)
+    
+    # Fix malformed patterns from LLM:
+    # Pattern: "*1. *text**" → "*1. text*" (number with mixed asterisks)
+    text = re.sub(r'\*(\d+\.)\s*\*([^*]+?)\*\*', r'*\1 \2*', text)
+    
+    # Fix: "**text *" or "* text**" → "*text*"
+    text = re.sub(r'\*\*\s*([^*]+?)\s*\*(?!\*)', r'*\1*', text)
+    text = re.sub(r'\*(?!\*)\s*([^*]+?)\s*\*\*', r'*\1*', text)
+    
+    # Fix standalone issues: "*text *" or "* text*" → "*text*"
+    text = re.sub(r'\*\s+([^*]+?)\*', r'*\1*', text)
+    text = re.sub(r'\*([^*]+?)\s+\*', r'*\1*', text)
+    
+    # Remove triple or more asterisks
+    text = re.sub(r'\*{3,}', r'*', text)
+
+    # Clean up any remaining double asterisks that weren't converted
+    text = re.sub(r'\*\*', r'*', text)
+
+    # Ensure a space after bolded tokens when immediately followed by text
+    text = re.sub(r'(\*[^*\n]+?\*)([A-Za-z0-9_])', r'\1 \2', text)
+
+    # Restore inline code
+    for i, code in enumerate(inline_codes):
+        text = text.replace(f"__INLINE_CODE_{i}__", code)
+    
+    # Restore code blocks
+    for i, block in enumerate(code_blocks):
+        text = text.replace(f"__CODE_BLOCK_{i}__", block)
+    
+    # Limit consecutive newlines to max 2
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
 
 
 def build_failure_notification(
@@ -65,20 +158,22 @@ def build_failure_notification(
     blocks.append({"type": "divider"})
     
     # Summary section
+    summary_text = _markdown_to_slack(analysis.summary)
     blocks.append({
         "type": "section",
         "text": {
             "type": "mrkdwn",
-            "text": f"*📊 Summary*\n{analysis.summary}"
+            "text": _truncate_text(f"*📊 Summary*\n{summary_text}")
         }
     })
     
-    # Likely Cause section
+    # Likely Cause section - convert markdown for Slack
+    cause_text = _markdown_to_slack(analysis.likely_cause)
     blocks.append({
         "type": "section",
         "text": {
             "type": "mrkdwn",
-            "text": f"*🎯 Likely Cause*\n{analysis.likely_cause}"
+            "text": _truncate_text(f"*🎯 Likely Cause*\n{cause_text}")
         }
     })
     
@@ -89,14 +184,14 @@ def build_failure_notification(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*🔧 Recommended Actions*\n{steps_text}"
+                "text": _truncate_text(f"*🔧 Recommended Actions*\n{steps_text}")
             }
         })
     
-    # Triage info if available
+    # Triage info if available and enabled
     triage_team = getattr(analysis, "triage_team", None)
     triage_reason = getattr(analysis, "triage_reason", None)
-    if triage_team:
+    if settings.show_triage_in_slack and triage_team:
         blocks.append({
             "type": "section",
             "text": {
@@ -250,11 +345,12 @@ def build_alert_batch_notification(
     
     # Analysis if available
     if analysis:
+        summary_text = _markdown_to_slack(analysis.summary)
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*🎯 Analysis*\n{analysis.summary}"
+                "text": f"*🎯 Analysis*\n{summary_text}"
             }
         })
         
@@ -594,7 +690,7 @@ def build_investigation_result_response(
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"{severity_emoji} Investigation Results: {target}",
+                "text": f"{severity_emoji} Investigation Results: {target}"[:150],  # Header limit
                 "emoji": True
             }
         },
@@ -603,14 +699,14 @@ def build_investigation_result_response(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*📊 Summary*\n{analysis.summary}"
+                "text": _truncate_text(f"*📊 Summary*\n{analysis.summary}")
             }
         },
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*🎯 Likely Cause*\n{analysis.likely_cause}"
+                "text": _truncate_text(f"*🎯 Likely Cause*\n{analysis.likely_cause}")
             }
         },
     ]
@@ -621,7 +717,7 @@ def build_investigation_result_response(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*🔧 Recommended Actions*\n{steps_text}"
+                "text": _truncate_text(f"*🔧 Recommended Actions*\n{steps_text}")
             }
         })
     
@@ -649,3 +745,36 @@ def build_error_response(message: str) -> List[Dict[str, Any]]:
             }
         }
     ]
+
+
+def build_conversational_response(response_text: str) -> List[Dict[str, Any]]:
+    """
+    Build a conversational response for thread replies.
+    
+    This is a simpler, more chat-like format compared to the formal
+    investigation result template. It converts Markdown to Slack mrkdwn
+    and presents the response as a natural conversation.
+    
+    Args:
+        response_text: The agent's response (can contain Markdown)
+        
+    Returns:
+        Slack blocks in a conversational format
+    """
+    # Convert Markdown to Slack mrkdwn format
+    formatted_text = _markdown_to_slack(response_text)
+    
+    # Truncate if needed
+    formatted_text = _truncate_text(formatted_text)
+    
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": formatted_text
+            }
+        }
+    ]
+    
+    return blocks

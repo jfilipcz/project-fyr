@@ -18,6 +18,7 @@ class AggregatedIssue(BaseModel):
     cause: str
     count: int
     description: str
+    severity: str  # critical, high, medium, or low
     affected_namespaces: list[str]
 
 
@@ -42,13 +43,11 @@ class IssueAggregator:
                 api_version=api_version or "2024-08-01-preview",
                 azure_endpoint=api_base,
                 api_key=api_key,
-                temperature=0,
             )
         else:
             # Use regular ChatOpenAI for OpenAI or other providers
             llm_kwargs = {
                 "model": model_name,
-                "temperature": 0,
             }
             
             if api_key:
@@ -66,9 +65,13 @@ class IssueAggregator:
             Your goal is to:
             1. Group similar failures together based on their root cause.
             2. Count how many times each type of failure occurred.
-            3. Provide a concise technical description of the pattern.
-            4. List the unique namespaces affected by each pattern.
-            5. Provide a high-level summary of the overall system health based on these failures.
+            3. Provide a concise technical description explaining WHY the failure happens and what impact it has.
+            4. Assign a severity: critical (service down/data loss), high (major degradation), medium (partial impact), or low (minor/cosmetic).
+            5. List the unique namespaces affected by each pattern.
+
+            For the `cause` field: provide a short title (e.g. "OOMKill in worker pods").
+            For the `description` field: explain the root cause and impact in 1-2 sentences.
+            For the `summary` field: leave it as an empty string (not used).
 
             Ignore transient or one-off errors if they are not significant, unless there are very few errors in total.
             Focus on recurring patterns like "OOMKills", "Missing ConfigMaps", "Image Pull Errors", etc.

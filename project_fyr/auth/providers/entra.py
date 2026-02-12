@@ -91,34 +91,77 @@ class EntraIDProvider(AuthProvider):
             issuer = unverified_payload.get('iss')
             kid = unverified_header.get('kid')
             token_version = unverified_payload.get('ver', '2.0')
+            token_alg = unverified_header.get('alg')
             
-            logger.debug(f"Validating token with kid={kid}, version={token_version}")
+            # Quick check: If this is an HS256 token without an issuer, it's likely a local session token
+            # Reject it immediately so the middleware can try the local provider
+            if token_alg == 'HS256' or (not issuer and token_alg != 'RS256'):
+                logger.debug(f"Token appears to be local (alg={token_alg}, issuer={issuer}), rejecting for SSO provider")
+                raise HTTPException(status_code=401, detail="Not a valid SSO token")
+            
+            logger.debug(f"Token header: {unverified_header}")
+            logger.debug(f"Token algorithm: {token_alg}")
+            logger.debug(f"Token kid: {kid}")
+            logger.debug(f"Token issuer: {issuer}")
+            logger.debug(f"Token audience: {unverified_payload.get('aud')}")
+            logger.debug(f"Token version: {token_version}")
+            
+            logger.debug(f"Validating token with kid={kid}, version={token_version}, issuer={issuer}")
+            logger.debug(f"Token payload keys: {list(unverified_payload.keys())}")
             
             # Get public keys from Microsoft's JWKS endpoint
             jwks_data = self.get_jwks(token_version)
+            logger.debug(f"Retrieved {len(jwks_data.get('keys', []))} keys from JWKS")
             
             # Find the matching key by kid (key ID)
             public_key = None
-            for key_data in jwks_data.get('keys', []):
-                if key_data.get('kid') == kid:
-                    public_key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key_data))
-                    public_key_bytes = public_key.public_bytes(
-                        encoding=serialization.Encoding.PEM,
-                        format=serialization.PublicFormat.SubjectPublicKeyInfo
-                    )
-                    break
+            public_key_bytes = None
+            
+            if kid:
+                # If kid is present, find the matching key
+                for key_data in jwks_data.get('keys', []):
+                    if key_data.get('kid') == kid:
+                        public_key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key_data))
+                        public_key_bytes = public_key.public_bytes(
+                            encoding=serialization.Encoding.PEM,
+                            format=serialization.PublicFormat.SubjectPublicKeyInfo
+                        )
+                        break
+            else:
+                # If no kid, try all keys until one works
+                logger.warning("No kid in token header, will try all available keys")
+                for key_data in jwks_data.get('keys', []):
+                    try:
+                        test_key = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key_data))
+                        public_key_bytes = test_key.public_bytes(
+                            encoding=serialization.Encoding.PEM,
+                            format=serialization.PublicFormat.SubjectPublicKeyInfo
+                        )
+                        # Try to decode with this key to see if it works
+                        jwt.decode(
+                            jwt=token,
+                            key=public_key_bytes,
+                            algorithms=['RS256'],
+                            options={"verify_signature": True, "verify_aud": False, "verify_iss": False}
+                        )
+                        # If we get here, this key worked
+                        logger.info(f"Found working key: {key_data.get('kid')}")
+                        break
+                    except Exception:
+                        continue
             
             if not public_key_bytes:
-                logger.warning(f"Token key ID not found: {kid}")
+                logger.error(f"Token key ID not found: {kid}, available keys: {[k.get('kid') for k in jwks_data.get('keys', [])]}")
                 raise HTTPException(status_code=401, detail="Token key ID not found")
             
             # Verify the token with the public key
             # For ID tokens in implicit flow, audience is the client_id (not api://client_id)
+            # Try multiple common algorithms that Azure AD might use
             decoded_payload = jwt.decode(
                 jwt=token,
                 key=public_key_bytes,
                 verify=True,
-                algorithms=['RS256'],
+                algorithms=['RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512'],
                 audience=self.client_id,  # ID tokens use client_id as audience
                 issuer=issuer,
                 options={
@@ -141,6 +184,9 @@ class EntraIDProvider(AuthProvider):
             logger.info(f"Successfully validated token for user {user_info.get('email')}")
             return user_info
             
+        except HTTPException:
+            # Re-raise HTTPException without catching it (for early rejection of local tokens)
+            raise
         except jwt.ExpiredSignatureError:
             logger.warning("Token has expired")
             raise HTTPException(status_code=401, detail="Token has expired")
