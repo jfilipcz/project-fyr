@@ -219,3 +219,4 @@ slack_messages.log
 
 # Agent notes (for AI assistants only)
 agents.md
+.opencode/
