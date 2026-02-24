@@ -137,8 +137,8 @@ class AnalysisWorker:
         namespace_channel: str | None = None,
     ) -> dict[str, Any]:
         annotations = self._get_namespace_annotations(namespace)
-        # Support both annotation styles: <prefix>/requestor-email and requestor (ephenv)
-        requestor_email = annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_EPHENV)
+        # Support both annotation styles: <prefix>/requestor-email and bare 'requestor'
+        requestor_email = annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_BARE)
         resolved_namespace_channel = namespace_channel or annotations.get(ANNOTATION_SLACK_CHANNEL)
 
         owner_channel = None
@@ -1048,7 +1048,7 @@ ANNOTATION_SLACK_CHANNEL = f"{_prefix}/slack-channel"
 ANNOTATION_TEAM = f"{_prefix}/team"
 ANNOTATION_PREFIX = f"{_prefix}/"
 ANNOTATION_REQUESTOR_EMAIL = f"{_prefix}/requestor-email"
-ANNOTATION_REQUESTOR_EMAIL_EPHENV = "requestor"  # Ephenv operator style
+ANNOTATION_REQUESTOR_EMAIL_BARE = "requestor"  # Bare annotation (no prefix)
 ANNOTATION_ENABLED = f"{_prefix}/enabled"
 LABEL_OWNER_CHANNEL = f"{_prefix}/owner-channel"
 
@@ -1056,9 +1056,9 @@ LABEL_OWNER_CHANNEL = f"{_prefix}/owner-channel"
 def parse_namespace_annotations(annotations: dict[str, str] | None) -> dict[str, Any]:
     annotations = annotations or {}
     namespace_specific = {k: v for k, v in annotations.items() if k.startswith(ANNOTATION_PREFIX)}
-    # Support both annotation styles: <prefix>/requestor-email and requestor (ephenv)
+    # Support both annotation styles: <prefix>/requestor-email and bare 'requestor'
     requestor_email = (
-        annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_EPHENV) or ""
+        annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_BARE) or ""
     ).strip()
     if requestor_email:
         namespace_specific[ANNOTATION_REQUESTOR_EMAIL] = requestor_email

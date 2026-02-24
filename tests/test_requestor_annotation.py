@@ -1,4 +1,4 @@
-"""Tests for ephemeral environment (ephenv) annotation support."""
+"""Tests for requestor annotation support in namespace parsing."""
 
 
 from project_fyr.service import parse_namespace_annotations, ANNOTATION_REQUESTOR_EMAIL
@@ -18,8 +18,8 @@ def test_parse_namespace_annotations_legacy_format():
     assert result["metadata_json"]["project-fyr.io/team"] == "Platform Team"
 
 
-def test_parse_namespace_annotations_ephenv_format():
-    """Test that ephenv 'requestor' annotation is recognized."""
+def test_parse_namespace_annotations_bare_requestor_format():
+    """Test that bare 'requestor' annotation is recognized."""
     annotations = {
         "requestor": "developer@example.com",
         "project-fyr.io/slack-channel": "#dev-notifications",
@@ -31,16 +31,16 @@ def test_parse_namespace_annotations_ephenv_format():
     assert result["metadata_json"]["project-fyr.io/slack-channel"] == "#dev-notifications"
 
 
-def test_parse_namespace_annotations_legacy_takes_precedence():
-    """Test that when both annotations exist, legacy format takes precedence."""
+def test_parse_namespace_annotations_prefixed_takes_precedence():
+    """Test that when both annotations exist, prefixed format takes precedence."""
     annotations = {
-        "project-fyr.io/requestor-email": "legacy@example.com",
-        "requestor": "ephenv@example.com",
+        "project-fyr.io/requestor-email": "prefixed@example.com",
+        "requestor": "bare@example.com",
     }
     result = parse_namespace_annotations(annotations)
 
-    # Legacy annotation should take precedence
-    assert result["metadata_json"][ANNOTATION_REQUESTOR_EMAIL] == "legacy@example.com"
+    # Prefixed annotation should take precedence
+    assert result["metadata_json"][ANNOTATION_REQUESTOR_EMAIL] == "prefixed@example.com"
 
 
 def test_parse_namespace_annotations_no_requestor():
@@ -83,13 +83,12 @@ def test_parse_namespace_annotations_whitespace_requestor():
     assert ANNOTATION_REQUESTOR_EMAIL not in result["metadata_json"]
 
 
-def test_parse_namespace_annotations_ephenv_real_world():
-    """Test realistic ephenv namespace annotation structure."""
-    # This mimics what the ephenv operator actually creates
+def test_parse_namespace_annotations_mixed_real_world():
+    """Test realistic namespace annotation structure with mixed annotations."""
     annotations = {
         "requestor": "jane.developer@example.com",
-        "ephenv.platform.example.com/environment-name": "test-nginx",
-        "ephenv.platform.example.com/expires-at": "2026-02-13T10:30:00Z",
+        "some-operator.io/environment-name": "test-nginx",
+        "some-operator.io/expires-at": "2026-02-13T10:30:00Z",
         "project-fyr.io/enabled": "true",
     }
     result = parse_namespace_annotations(annotations)
@@ -97,5 +96,5 @@ def test_parse_namespace_annotations_ephenv_real_world():
     # Should extract requestor and project-fyr annotations
     assert result["metadata_json"][ANNOTATION_REQUESTOR_EMAIL] == "jane.developer@example.com"
     assert result["metadata_json"]["project-fyr.io/enabled"] == "true"
-    # Ephenv-specific annotations not captured (no project-fyr.io/ prefix)
-    assert "ephenv.platform.example.com/environment-name" not in result["metadata_json"]
+    # Non-project-fyr annotations not captured
+    assert "some-operator.io/environment-name" not in result["metadata_json"]

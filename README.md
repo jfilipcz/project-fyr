@@ -172,50 +172,6 @@ kubectl annotate namespace payments \
   project-fyr/team="Payments SRE" --overwrite
 ```
 
-### Ephemeral Environment Integration
-
-Project Fyr seamlessly integrates with the **Ephemeral Environment (Ephenv) operator** to provide automatic failure detection and direct notifications to environment creators.
-
-When a deployment fails in an ephemeral namespace, Project Fyr:
-1. Detects the failure automatically
-2. Extracts the requestor email from the namespace annotation
-3. Analyzes the failure using AI 
-4. Sends a **direct Slack DM** to the requestor with the analysis
-
-#### Annotation Support
-
-Project Fyr recognizes two annotation formats for requestor email:
-
-- **Ephenv style**: `requestor: user@example.com` (default for ephenv-created namespaces)
-- **Legacy style**: `project-fyr.io/requestor-email: user@example.com`
-
-Both formats work identically - use whichever matches your workflow.
-
-#### Enabling Requestor DMs
-
-To enable direct messages to ephemeral environment requestors:
-
-```yaml
-# In your values.yaml or Helm deployment
-env:
-  - name: PROJECT_FYR_ENABLE_REQUESTOR_DM
-    value: "true"
-```
-
-**Note:** This feature is disabled by default (`false`). Enable it when you're ready to roll out ephemeral environment monitoring.
-
-#### User Experience
-
-When you create an ephemeral environment and a deployment fails:
-- You receive a Slack DM with:
-  - Root cause analysis
-  - Relevant logs and events
-  - Suggested remediation steps
-  - Link to detailed dashboard view
-- No need to check channels or dashboards - the notification comes directly to you
-
-For detailed information about ephenv integration, including troubleshooting and monitoring, see [Ephemeral Environment Integration Guide](docs/ephenv-integration.md).
-
 ### Deployment Monitoring Options
 
 Project Fyr offers flexible monitoring options through labels and annotations:
