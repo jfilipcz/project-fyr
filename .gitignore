@@ -220,3 +220,17 @@ slack_messages.log
 # Agent notes (for AI assistants only)
 agents.md
 .opencode/
+
+# Editor/IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Secrets directory (for create-slack-secrets.sh)
+secrets/
