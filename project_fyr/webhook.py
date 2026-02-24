@@ -1,6 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 from fastapi import APIRouter, Header, HTTPException, Request, Depends
 from typing import Optional, Iterator
-from datetime import datetime
+from datetime import datetime, timedelta
+from project_fyr import utcnow
 import logging
 
 from .config import settings
@@ -10,13 +13,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Shared database engine (created once, reused across requests)
+_engine = None
+
+def _get_engine():
+    global _engine
+    if _engine is None:
+        _engine = init_db(settings.database_url)
+    return _engine
+
 def get_alert_repo() -> Iterator[AlertRepo]:
-    engine = init_db(settings.database_url)
-    yield AlertRepo(engine)
-
-from datetime import datetime, timedelta
-
-# ... imports ...
+    yield AlertRepo(_get_engine())
 
 @router.post("/webhook/alert", status_code=202)
 async def receive_alert(
@@ -25,7 +32,10 @@ async def receive_alert(
     repo: AlertRepo = Depends(get_alert_repo)
 ):
     # Auth check
-    if settings.alert_webhook_secret and x_alert_token != settings.alert_webhook_secret:
+    if not settings.alert_webhook_secret:
+        logger.warning("Webhook endpoint called but alert_webhook_secret is not configured - rejecting request")
+        raise HTTPException(status_code=403, detail="Webhook authentication not configured")
+    if x_alert_token != settings.alert_webhook_secret:
         raise HTTPException(status_code=401, detail="Invalid alert token")
 
     try:
@@ -44,7 +54,7 @@ async def receive_alert(
     saved_count = 0
     investigation_triggered_count = 0
     skipped_count = 0
-    
+
     for item in alerts:
         # Extract fields
         status = item.get("status", "firing")
@@ -53,29 +63,29 @@ async def receive_alert(
         starts_at_str = item.get("startsAt")
         ends_at_str = item.get("endsAt")
         fingerprint = item.get("fingerprint") or labels.get("alertname", "unknown")
-        
+
         # Parse times
-        starts_at = datetime.utcnow()
+        starts_at = utcnow()
         if starts_at_str:
             try:
                 starts_at = datetime.fromisoformat(starts_at_str.replace("Z", "+00:00"))
             except ValueError:
                 pass
-        
+
         ends_at = None
         if ends_at_str and ends_at_str != "0001-01-01T00:00:00Z":
              try:
                 ends_at = datetime.fromisoformat(ends_at_str.replace("Z", "+00:00"))
              except ValueError:
                 pass
-        
+
         # --- Stateful Logic ---
-        now = datetime.utcnow()
+        now = utcnow()
         should_investigate = False
-        
+
         # Get current state
         state = repo.get_state(fingerprint)
-        
+
         # Sticky Throttling: Check if we investigated recently, regardless of status.
         is_throttled = False
         if state and state.last_investigated_at:
@@ -96,7 +106,7 @@ async def receive_alert(
                 # So we can just say True here.
                 should_investigate = True
                 logger.info(f"Re-triggering investigation for persistent alert {fingerprint}")
-        
+
         elif status == "resolved":
             should_investigate = False
             logger.info(f"Alert {fingerprint} resolved")
@@ -106,7 +116,7 @@ async def receive_alert(
         # so the batcher doesn't pick it up.
         # Ideally we'd have a separate status like 'batched' vs 'skipped', but 'batched=True' effectively hides it from batcher.
         # We can use batch_id=-1 to indicate skipping if needed, but simple boolean is enough to hide it.
-        
+
         alert_record = repo.create_alert(
             fingerprint=fingerprint,
             status=status,
@@ -116,7 +126,7 @@ async def receive_alert(
             annotations=annotations,
             payload=item
         )
-        
+
         if not should_investigate:
             # Mark as processed/skipped to avoid batcher pickup
             # We can do this by updating 'batched' to True immediately (or 1 in sqlite)
@@ -126,10 +136,10 @@ async def receive_alert(
             # Optimization: could add 'batched' to create_alert arguments.
             # But adhering to minimum changes, let's do a quick update or rely on `batched` default being 0.
             # Wait, `create_alert` returns the record. We can set it?
-            # No, `create_alert` commits. Use a simple update in repo? 
+            # No, `create_alert` commits. Use a simple update in repo?
             # Actually, let's just use SQL.
             pass # See below, we need to modify logic to set batched=True if skipped.
-            
+
             # Since create_alert commits, we might want to update it.
             # But cleaner is to update `repo.create_alert` to accept `batched` param?
             # Or just hack it:
@@ -143,12 +153,12 @@ async def receive_alert(
             # NOTE: raw SQL is a bit risky if we change DBs, but this is SQLite.
             # Better to add `repo.mark_as_processed(alert_record.id)` or similar.
             # Let's rely on standard practice: update the state, then handle the record.
-            
+
             skipped_count += 1
-            
+
         else:
             investigation_triggered_count += 1
-            
+
         # Update State
         repo.update_state(
             fingerprint=fingerprint,

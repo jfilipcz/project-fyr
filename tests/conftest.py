@@ -18,7 +18,7 @@ def engine():
 
 @pytest.fixture
 def repo(engine):
-    return RolloutRepo(engine)
+    return RolloutRepo(engine, annotation_prefix="project-fyr.io")
 
 @pytest.fixture
 def session(engine):

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Slack Block Kit message builders for Project Fyr."""
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ def _get_dashboard_url(path: str) -> str:
 def _markdown_to_slack(text: str) -> str:
     """
     Convert standard Markdown to Slack mrkdwn format.
-    
+
     Conversions:
     - ## Headers → *Bold Headers*
     - ### Sub-headers → *Bold Sub-headers*
@@ -48,52 +50,52 @@ def _markdown_to_slack(text: str) -> str:
     - `code` → `code` (same)
     - ```code blocks``` → ```code blocks``` (same)
     - Remove excessive line breaks
-    
+
     Slack mrkdwn rules:
     - Asterisks must be directly adjacent to text (no spaces)
     - Only single asterisks for bold (not double)
     """
     if not text:
         return text
-    
+
     # First, protect code blocks from modification
     # Extract code blocks temporarily
     code_blocks = []
     def save_code_block(match):
         code_blocks.append(match.group(0))
         return f"__CODE_BLOCK_{len(code_blocks)-1}__"
-    
+
     text = re.sub(r'```[\s\S]*?```', save_code_block, text)
-    
+
     # Protect inline code
     inline_codes = []
     def save_inline_code(match):
         inline_codes.append(match.group(0))
         return f"__INLINE_CODE_{len(inline_codes)-1}__"
-    
+
     text = re.sub(r'`[^`]+`', save_inline_code, text)
-    
+
     # Convert ## headers to bold with newline
     text = re.sub(r'^## (.+)$', r'*\1*', text, flags=re.MULTILINE)
-    
+
     # Convert ### sub-headers to bold
     text = re.sub(r'^### (.+)$', r'*\1*', text, flags=re.MULTILINE)
-    
+
     # Convert **bold** to *bold* (Slack format) - but be careful with multiple on same line
     text = re.sub(r'\*\*([^*]+?)\*\*', r'*\1*', text)
-    
+
     # Fix malformed patterns from LLM:
     # Pattern: "*1. *text**" → "*1. text*" (number with mixed asterisks)
     text = re.sub(r'\*(\d+\.)\s*\*([^*]+?)\*\*', r'*\1 \2*', text)
-    
+
     # Fix: "**text *" or "* text**" → "*text*"
     text = re.sub(r'\*\*\s*([^*]+?)\s*\*(?!\*)', r'*\1*', text)
     text = re.sub(r'\*(?!\*)\s*([^*]+?)\s*\*\*', r'*\1*', text)
-    
+
     # Fix standalone issues: "*text *" or "* text*" → "*text*"
     text = re.sub(r'\*\s+([^*]+?)\*', r'*\1*', text)
     text = re.sub(r'\*([^*]+?)\s+\*', r'*\1*', text)
-    
+
     # Remove triple or more asterisks
     text = re.sub(r'\*{3,}', r'*', text)
 
@@ -106,14 +108,14 @@ def _markdown_to_slack(text: str) -> str:
     # Restore inline code
     for i, code in enumerate(inline_codes):
         text = text.replace(f"__INLINE_CODE_{i}__", code)
-    
+
     # Restore code blocks
     for i, block in enumerate(code_blocks):
         text = text.replace(f"__CODE_BLOCK_{i}__", block)
-    
+
     # Limit consecutive newlines to max 2
     text = re.sub(r'\n{3,}', '\n\n', text)
-    
+
     return text.strip()
 
 
@@ -130,7 +132,7 @@ def build_failure_notification(
 ) -> List[Dict[str, Any]]:
     """
     Build enhanced Slack Block Kit message for deployment failure.
-    
+
     Includes:
     - Header with severity indicator
     - Summary section
@@ -141,9 +143,9 @@ def build_failure_notification(
     """
     severity_emoji = _get_severity_emoji(analysis.severity)
     cluster_name = cluster or settings.k8s_cluster_name
-    
+
     blocks = []
-    
+
     # Header
     blocks.append({
         "type": "header",
@@ -153,10 +155,10 @@ def build_failure_notification(
             "emoji": True
         }
     })
-    
+
     # Divider
     blocks.append({"type": "divider"})
-    
+
     # Summary section
     summary_text = _markdown_to_slack(analysis.summary)
     blocks.append({
@@ -166,7 +168,7 @@ def build_failure_notification(
             "text": _truncate_text(f"*📊 Summary*\n{summary_text}")
         }
     })
-    
+
     # Likely Cause section - convert markdown for Slack
     cause_text = _markdown_to_slack(analysis.likely_cause)
     blocks.append({
@@ -176,7 +178,7 @@ def build_failure_notification(
             "text": _truncate_text(f"*🎯 Likely Cause*\n{cause_text}")
         }
     })
-    
+
     # Recommended Actions
     if analysis.recommended_steps:
         steps_text = "\n".join([f"• {step}" for step in analysis.recommended_steps[:5]])
@@ -187,7 +189,7 @@ def build_failure_notification(
                 "text": _truncate_text(f"*🔧 Recommended Actions*\n{steps_text}")
             }
         })
-    
+
     # Triage info if available and enabled
     triage_team = getattr(analysis, "triage_team", None)
     triage_reason = getattr(analysis, "triage_reason", None)
@@ -199,13 +201,13 @@ def build_failure_notification(
                 "text": f"*👥 Triage*\nAssigned to: *{triage_team}*\n_{triage_reason}_"
             }
         })
-    
+
     # Divider before actions
     blocks.append({"type": "divider"})
-    
+
     # Action buttons
     action_elements = []
-    
+
     # View in Fyr button
     if rollout_id:
         view_url = _get_dashboard_url(f"/rollout/{rollout_id}")
@@ -219,7 +221,7 @@ def build_failure_notification(
             "url": view_url,
             "action_id": "view_in_fyr"
         })
-    
+
     # Investigate Further button (triggers AI chat in thread)
     if namespace and deployment:
         action_elements.append({
@@ -232,7 +234,7 @@ def build_failure_notification(
             "action_id": "investigate_further",
             "value": f"{namespace}/{deployment}"
         })
-    
+
     # Pipeline link if available
     if pipeline_url:
         action_elements.append({
@@ -245,49 +247,49 @@ def build_failure_notification(
             "url": pipeline_url,
             "action_id": "view_pipeline"
         })
-    
+
     if action_elements:
         blocks.append({
             "type": "actions",
             "elements": action_elements
         })
-    
+
     # Context footer
     context_elements = []
-    
+
     if namespace:
         context_elements.append({
             "type": "mrkdwn",
             "text": f"*Namespace:* {namespace}"
         })
-    
+
     if team:
         context_elements.append({
             "type": "mrkdwn",
             "text": f"*Team:* {team}"
         })
-    
+
     context_elements.append({
         "type": "mrkdwn",
         "text": f"*Severity:* {analysis.severity.capitalize()}"
     })
-    
+
     context_elements.append({
         "type": "mrkdwn",
         "text": f"*Cluster:* {cluster_name}"
     })
-    
+
     if rollout_id:
         context_elements.append({
             "type": "mrkdwn",
             "text": f"*Rollout ID:* {rollout_id}"
         })
-    
+
     blocks.append({
         "type": "context",
         "elements": context_elements
     })
-    
+
     return blocks
 
 
@@ -305,14 +307,14 @@ def build_alert_batch_notification(
     alert_count = len(alerts)
     severity = analysis.severity if analysis else "medium"
     severity_emoji = _get_severity_emoji(severity)
-    
+
     blocks = []
-    
+
     # Header
     header_text = f"{severity_emoji} Alert Batch: {namespace}"
     if alert_count > 1:
         header_text += f" ({alert_count} related alerts)"
-    
+
     blocks.append({
         "type": "header",
         "text": {
@@ -321,9 +323,9 @@ def build_alert_batch_notification(
             "emoji": True
         }
     })
-    
+
     blocks.append({"type": "divider"})
-    
+
     # Alert list
     alert_list = []
     for alert in alerts[:5]:  # Limit to 5 alerts
@@ -331,18 +333,18 @@ def build_alert_batch_notification(
         alert_name = labels.get("alertname", "Unknown")
         pod = labels.get("pod", labels.get("instance", ""))
         alert_list.append(f"• *{alert_name}*" + (f": {pod}" if pod else ""))
-    
+
     if alert_count > 5:
         alert_list.append(f"_...and {alert_count - 5} more_")
-    
+
     blocks.append({
         "type": "section",
         "text": {
             "type": "mrkdwn",
-            "text": f"*🚨 Alerts in this batch:*\n" + "\n".join(alert_list)
+            "text": "*🚨 Alerts in this batch:*\n" + "\n".join(alert_list)
         }
     })
-    
+
     # Analysis if available
     if analysis:
         summary_text = _markdown_to_slack(analysis.summary)
@@ -353,7 +355,7 @@ def build_alert_batch_notification(
                 "text": f"*🎯 Analysis*\n{summary_text}"
             }
         })
-        
+
         if analysis.recommended_steps:
             steps_text = "\n".join([f"• {step}" for step in analysis.recommended_steps[:3]])
             blocks.append({
@@ -363,9 +365,9 @@ def build_alert_batch_notification(
                     "text": f"*🔧 Recommended Actions*\n{steps_text}"
                 }
             })
-    
+
     blocks.append({"type": "divider"})
-    
+
     # Action buttons
     action_elements = [
         {
@@ -390,12 +392,12 @@ def build_alert_batch_notification(
             "style": "primary"
         }
     ]
-    
+
     blocks.append({
         "type": "actions",
         "elements": action_elements
     })
-    
+
     # Context
     blocks.append({
         "type": "context",
@@ -405,7 +407,7 @@ def build_alert_batch_notification(
             {"type": "mrkdwn", "text": f"*Batch ID:* {batch_id}"},
         ]
     })
-    
+
     return blocks
 
 
@@ -419,7 +421,7 @@ def build_status_response(
 ) -> List[Dict[str, Any]]:
     """Build response for /fyr status command."""
     blocks = []
-    
+
     blocks.append({
         "type": "header",
         "text": {
@@ -428,9 +430,9 @@ def build_status_response(
             "emoji": True
         }
     })
-    
+
     blocks.append({"type": "divider"})
-    
+
     # Stats
     blocks.append({
         "type": "section",
@@ -439,7 +441,7 @@ def build_status_response(
             "text": f"*Last 24 hours:*\n✅ Successful rollouts: {successful}\n⚠️ Failed rollouts: {failed}\n🔄 In progress: {in_progress}"
         }
     })
-    
+
     # Recent failures
     if recent_failures:
         failure_list = []
@@ -449,12 +451,12 @@ def build_status_response(
             time_ago = f.get("time_ago", "")
             cause = f.get("cause", "")
             failure_list.append(f"• *{name}* ({ns}) - {time_ago}\n  _{cause}_")
-        
+
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Recent failures:*\n" + "\n".join(failure_list)
+                "text": "*Recent failures:*\n" + "\n".join(failure_list)
             }
         })
     else:
@@ -465,9 +467,9 @@ def build_status_response(
                 "text": "✨ *No recent failures!*"
             }
         })
-    
+
     blocks.append({"type": "divider"})
-    
+
     # Dashboard button
     blocks.append({
         "type": "actions",
@@ -484,7 +486,7 @@ def build_status_response(
             }
         ]
     })
-    
+
     return blocks
 
 
@@ -500,9 +502,9 @@ def build_namespace_response(
 ) -> List[Dict[str, Any]]:
     """Build response for /fyr namespace <ns> command."""
     blocks = []
-    
+
     status_emoji = "🟢" if deployments_degraded == 0 else "🟡" if deployments_degraded < deployments_total / 2 else "🔴"
-    
+
     blocks.append({
         "type": "header",
         "text": {
@@ -511,9 +513,9 @@ def build_namespace_response(
             "emoji": True
         }
     })
-    
+
     blocks.append({"type": "divider"})
-    
+
     # Status overview
     blocks.append({
         "type": "section",
@@ -522,7 +524,7 @@ def build_namespace_response(
             "text": f"*Status:* {status_emoji} {status}\n*Deployments:* {deployments_total} ({deployments_healthy} healthy, {deployments_degraded} degraded)"
         }
     })
-    
+
     # Issues
     if issues:
         issues_text = "\n".join([f"• {issue}" for issue in issues[:5]])
@@ -533,7 +535,7 @@ def build_namespace_response(
                 "text": f"*⚠️ Issues detected:*\n{issues_text}"
             }
         })
-    
+
     # Quotas
     if quotas:
         quota_lines = []
@@ -543,17 +545,17 @@ def build_namespace_response(
             pct = (used / limit * 100) if limit else 0
             emoji = "🔴" if pct > 90 else "🟡" if pct > 70 else "🟢"
             quota_lines.append(f"{emoji} {resource}: {used}/{limit} ({pct:.0f}%)")
-        
+
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Resource Quotas:*\n" + "\n".join(quota_lines)
+                "text": "*Resource Quotas:*\n" + "\n".join(quota_lines)
             }
         })
-    
+
     blocks.append({"type": "divider"})
-    
+
     # Action buttons
     blocks.append({
         "type": "actions",
@@ -581,14 +583,14 @@ def build_namespace_response(
             }
         ]
     })
-    
+
     return blocks
 
 
 def build_help_response() -> List[Dict[str, Any]]:
     """Build response for /fyr help command."""
     blocks = []
-    
+
     blocks.append({
         "type": "header",
         "text": {
@@ -597,9 +599,9 @@ def build_help_response() -> List[Dict[str, Any]]:
             "emoji": True
         }
     })
-    
+
     blocks.append({"type": "divider"})
-    
+
     blocks.append({
         "type": "section",
         "text": {
@@ -607,7 +609,7 @@ def build_help_response() -> List[Dict[str, Any]]:
             "text": "*Available Commands:*"
         }
     })
-    
+
     commands = [
         ("`/fyr status`", "Show cluster health summary"),
         ("`/fyr namespace <ns>`", "Check namespace health"),
@@ -615,7 +617,7 @@ def build_help_response() -> List[Dict[str, Any]]:
         ("`/fyr recent`", "List recent failures (24h)"),
         ("`/fyr help`", "Show this help message"),
     ]
-    
+
     for cmd, desc in commands:
         blocks.append({
             "type": "section",
@@ -624,9 +626,9 @@ def build_help_response() -> List[Dict[str, Any]]:
                 "text": f"{cmd}\n_{desc}_"
             }
         })
-    
+
     blocks.append({"type": "divider"})
-    
+
     blocks.append({
         "type": "context",
         "elements": [
@@ -636,7 +638,7 @@ def build_help_response() -> List[Dict[str, Any]]:
             }
         ]
     })
-    
+
     # Dashboard button
     blocks.append({
         "type": "actions",
@@ -653,7 +655,7 @@ def build_help_response() -> List[Dict[str, Any]]:
             }
         ]
     })
-    
+
     return blocks
 
 
@@ -663,7 +665,7 @@ def build_investigation_started_response(
 ) -> List[Dict[str, Any]]:
     """Build response when investigation is starting."""
     target = f"{namespace}/{deployment}" if deployment else namespace
-    
+
     return [
         {
             "type": "section",
@@ -684,7 +686,7 @@ def build_investigation_result_response(
     """Build response with investigation results."""
     target = f"{namespace}/{deployment}" if deployment else namespace
     severity_emoji = _get_severity_emoji(analysis.severity)
-    
+
     blocks = [
         {
             "type": "header",
@@ -710,7 +712,7 @@ def build_investigation_result_response(
             }
         },
     ]
-    
+
     if analysis.recommended_steps:
         steps_text = "\n".join([f"• {step}" for step in analysis.recommended_steps])
         blocks.append({
@@ -720,9 +722,9 @@ def build_investigation_result_response(
                 "text": _truncate_text(f"*🔧 Recommended Actions*\n{steps_text}")
             }
         })
-    
+
     blocks.append({"type": "divider"})
-    
+
     blocks.append({
         "type": "context",
         "elements": [
@@ -730,7 +732,7 @@ def build_investigation_result_response(
             {"type": "mrkdwn", "text": f"*Namespace:* {namespace}"},
         ]
     })
-    
+
     return blocks
 
 
@@ -750,23 +752,23 @@ def build_error_response(message: str) -> List[Dict[str, Any]]:
 def build_conversational_response(response_text: str) -> List[Dict[str, Any]]:
     """
     Build a conversational response for thread replies.
-    
+
     This is a simpler, more chat-like format compared to the formal
     investigation result template. It converts Markdown to Slack mrkdwn
     and presents the response as a natural conversation.
-    
+
     Args:
         response_text: The agent's response (can contain Markdown)
-        
+
     Returns:
         Slack blocks in a conversational format
     """
     # Convert Markdown to Slack mrkdwn format
     formatted_text = _markdown_to_slack(response_text)
-    
+
     # Truncate if needed
     formatted_text = _truncate_text(formatted_text)
-    
+
     blocks = [
         {
             "type": "section",
@@ -776,5 +778,5 @@ def build_conversational_response(response_text: str) -> List[Dict[str, Any]]:
             }
         }
     ]
-    
+
     return blocks

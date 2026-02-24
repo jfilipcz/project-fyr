@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Core models shared across components."""
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ class RolloutStatus(str, Enum):
 
 class AnalysisStatus(str, Enum):
     """Status of rollout analysis.
-    
+
     NOT_NEEDED: Rollout doesn't require analysis (e.g., successful deployments)
     PENDING: Waiting for analysis (rollout confirmed failed)
     SPECULATIVE: Analysis started speculatively (rollout still in progress)

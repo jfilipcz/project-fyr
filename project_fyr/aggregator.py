@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Issue aggregator using LangChain to cluster and summarize failures."""
 
 from __future__ import annotations
@@ -6,7 +8,6 @@ import logging
 from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from pydantic import BaseModel
 
 from .db import Rollout, AnalysisRecord
@@ -29,39 +30,30 @@ class AggregationResult(BaseModel):
 
 class IssueAggregator:
     def __init__(
-        self, 
+        self,
         model_name: str = "gpt-4-turbo-preview",
         api_key: str | None = None,
         api_base: str | None = None,
         api_version: str | None = None,
         azure_deployment: str | None = None,
     ):
-        # Use AzureChatOpenAI if Azure-specific parameters are provided
-        if azure_deployment and api_base:
-            llm = AzureChatOpenAI(
-                azure_deployment=azure_deployment,
-                api_version=api_version or "2024-08-01-preview",
-                azure_endpoint=api_base,
-                api_key=api_key,
-            )
-        else:
-            # Use regular ChatOpenAI for OpenAI or other providers
-            llm_kwargs = {
-                "model": model_name,
-            }
-            
-            if api_key:
-                llm_kwargs["api_key"] = api_key
-            if api_base:
-                llm_kwargs["base_url"] = api_base
-            
-            llm = ChatOpenAI(**llm_kwargs)
-        
+        from .llm import create_llm
+        from .config import Settings
+
+        _settings = Settings(
+            langchain_model_name=model_name,
+            openai_api_key=api_key,
+            openai_api_base=api_base,
+            openai_api_version=api_version,
+            azure_deployment=azure_deployment,
+        )
+        llm = create_llm(_settings)
+
         self.llm = llm.with_structured_output(AggregationResult)
 
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", """You are an expert SRE / DevOps engineer analyzing a list of recent deployment failures.
-            
+
             Your goal is to:
             1. Group similar failures together based on their root cause.
             2. Count how many times each type of failure occurred.

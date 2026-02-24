@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Simple heuristics to triage failures to the right team."""
 
 from __future__ import annotations

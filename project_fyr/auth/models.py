@@ -1,7 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Database models for authentication."""
 
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
-from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 
 from ..db import Base
@@ -9,9 +10,9 @@ from ..db import Base
 
 class User(Base):
     """Local user account."""
-    
+
     __tablename__ = "users"
-    
+
     id = Column(Integer, primary_key=True)
     username = Column(String(255), unique=True, nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
@@ -25,9 +26,9 @@ class User(Base):
 
 class UserSession(Base):
     """User session tracking and OAuth state storage."""
-    
+
     __tablename__ = "user_sessions"
-    
+
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, nullable=True, index=True)  # Nullable for OAuth state
     session_id = Column(String(255), unique=True, nullable=True, index=True)  # For OAuth state

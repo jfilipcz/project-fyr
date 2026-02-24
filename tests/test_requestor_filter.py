@@ -1,4 +1,4 @@
-from datetime import datetime
+from project_fyr import utcnow
 
 from project_fyr.models import RolloutStatus
 
@@ -6,14 +6,14 @@ from project_fyr.models import RolloutStatus
 def _create_rollout(repo, *, namespace, deployment, status, requestor=None):
     metadata_json = {}
     if requestor:
-        metadata_json["example.com/requestor-email"] = requestor
+        metadata_json["project-fyr.io/requestor-email"] = requestor
     return repo.create(
         cluster="test-cluster",
         namespace=namespace,
         deployment=deployment,
         generation=1,
         status=status,
-        started_at=datetime.utcnow(),
+        started_at=utcnow(),
         metadata_json=metadata_json,
     )
 

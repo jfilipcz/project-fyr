@@ -36,16 +36,7 @@ A single `Dockerfile` builds all three services:
 - **Analyzer**: `python -m project_fyr.analyzer_service`
 - **Dashboard**: `python -m project_fyr.dashboard`
 
-You can use the provided `Makefile`:
-
-```bash
-make build TAG=dev
-make push TAG=1.0.0 REGISTRY=ghcr.io/my-org
-# cross-compile for specific platform
-make build TAG=dev PLATFORM=linux/amd64
-```
-
-Example build/run:
+Build and push:
 
 ```bash
 docker build -t project-fyr:latest .
@@ -133,9 +124,35 @@ All services read settings via the `PROJECT_FYR_*` environment variables:
 | `PROJECT_FYR_ALERT_WEBHOOK_SECRET` | Secret for alert webhook authentication | empty |
 | `PROJECT_FYR_ALERT_CORRELATION_WINDOW_SECONDS` | Time window for alert batching | `300` |
 | `PROJECT_FYR_ALERT_BATCH_MIN_COUNT` | Minimum alerts to trigger batch investigation | `1` |
+| `PROJECT_FYR_ANNOTATION_PREFIX` | Kubernetes annotation prefix for metadata | `project-fyr.io` |
+| `PROJECT_FYR_SSO_PROVIDER` | SSO provider: `none`, `entra`, or `generic_oidc` | `none` |
+| `PROJECT_FYR_OIDC_ISSUER` | OIDC issuer URL (for generic_oidc provider) | empty |
+| `PROJECT_FYR_OIDC_JWKS_URI` | OIDC JWKS endpoint (overrides issuer discovery) | empty |
+| `PROJECT_FYR_OIDC_AUDIENCE` | Expected JWT audience claim | empty |
+| `PROJECT_FYR_LOCAL_AUTH_JWT_SECRET` | Secret for local JWT auth (must be set in production) | empty |
 
 
 When deploying with External Secret Operator, set `secrets.existingSecret` (Helm value) so the watcher pod pulls credentials/keys from that Secret via `envFrom`.
+
+### LLM Provider Configuration
+
+Project Fyr supports multiple LLM backends via a unified factory (`project_fyr/llm.py`):
+
+| Provider | Required Variables |
+|----------|--------------------|
+| **OpenAI** | `OPENAI_API_KEY`, `LANGCHAIN_MODEL_NAME` |
+| **Azure OpenAI** | `OPENAI_API_KEY`, `OPENAI_API_BASE`, `AZURE_DEPLOYMENT` (and optionally `OPENAI_API_VERSION`) |
+| **OpenAI-compatible** (Ollama, vLLM, LiteLLM) | `OPENAI_API_BASE` (pointing to the compatible endpoint), `LANGCHAIN_MODEL_NAME` |
+
+All variables are prefixed with `PROJECT_FYR_`.
+
+### Authentication
+
+The dashboard supports multiple authentication methods:
+
+- **Local auth** — username/password with JWT tokens. Set `PROJECT_FYR_LOCAL_AUTH_JWT_SECRET` to a strong random value.
+- **Generic OIDC** — works with Okta, Keycloak, Auth0, Google Workspace, or any standards-compliant provider. Set `PROJECT_FYR_SSO_PROVIDER=generic_oidc` and configure `OIDC_ISSUER` + `OIDC_AUDIENCE`.
+- **Microsoft Entra ID** — set `PROJECT_FYR_SSO_PROVIDER=entra` with appropriate tenant configuration.
 
 ### Namespace metadata
 
@@ -170,7 +187,7 @@ When a deployment fails in an ephemeral namespace, Project Fyr:
 Project Fyr recognizes two annotation formats for requestor email:
 
 - **Ephenv style**: `requestor: user@example.com` (default for ephenv-created namespaces)
-- **Legacy style**: `example.com/requestor-email: user@example.com`
+- **Legacy style**: `project-fyr.io/requestor-email: user@example.com`
 
 Both formats work identically - use whichever matches your workflow.
 

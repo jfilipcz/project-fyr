@@ -62,6 +62,7 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+*.db
 
 # Flask stuff:
 instance/
@@ -208,8 +209,10 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Project-specific secrets and local scripts
+# Project-specific secrets and local overrides
+override-values.yaml
 *.key
+*.pem
 *-openai-api.key
 run_local_azure.sh
 slack_messages.log

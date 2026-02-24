@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Agent implementation for Project Fyr."""
 
 from __future__ import annotations
@@ -6,7 +8,6 @@ import logging
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import BaseCallbackHandler
 from prometheus_client import Histogram, Counter
 
@@ -76,7 +77,7 @@ IMPORTANT NOTES:
 - Pods in 'Succeeded' state from Jobs/CronJobs are NOT failures - they completed successfully
 - Only investigate actual problems, not completed workloads
 
-Follow this investigation process:
+INVESTIGATION PROCESS:
 1. Start by listing the pods for the deployment to see their status.
 2. Check events in the namespace for any errors related to the deployment or pods.
 3. If pods are crashing (CrashLoopBackOff), inspect their logs. Use `previous=True` if they have restarted recently.
@@ -98,28 +99,55 @@ Follow this investigation process:
    - High memory usage approaching limits
    - Network errors that might cause connectivity issues
 
+COMMON FAILURE PATTERNS TO INVESTIGATE:
+- **ImagePullBackOff**: Check image name typos, registry authentication (pull secrets), image tag existence
+- **CrashLoopBackOff**: Check container logs (current AND previous), liveness probe configuration, startup time
+- **OOMKilled**: Compare memory limits vs actual usage, check for memory leaks in application
+- **Pending (Unschedulable)**: Check node capacity, resource requests, taints/tolerations, affinity rules
+- **Init containers failing**: Use `k8s_get_init_containers` - these often block pod startup silently
+- **CreateContainerConfigError**: Check ConfigMap/Secret existence and keys, volume mount configurations
+- **Readiness probe failures**: Examine probe configuration, check if service dependencies are available
+
+QUALITY CHECKLIST - Verify BEFORE providing your final analysis:
+☐ Pod status examined (current state, restarts, age)
+☐ Recent events reviewed (errors, warnings, scheduling issues)
+☐ Container logs inspected (both current and previous if restarted)
+☐ Init containers checked (if pods are stuck in Init state)
+☐ Resource constraints verified (limits, quotas, node capacity)
+☐ Dependencies validated (ConfigMaps, Secrets, Services, PVCs)
+☐ Deployment/ReplicaSet history reviewed (if rollout-related failure)
+☐ Evidence cited from tool outputs (don't speculate without data)
+
+EVIDENCE-BASED ANALYSIS REQUIREMENTS:
+- Base conclusions ONLY on tool output data you've gathered
+- Quote specific error messages from logs/events when identifying root cause
+- If you see an error pattern, cite the exact error text
+- If you cannot find evidence for something, say "Unable to determine" rather than guessing
+- When recommending remediation, explain WHY based on what you observed
+
 Your final answer must be a structured analysis containing:
-- A summary of the issue.
-- The likely root cause.
-- Recommended remediation steps.
-- A severity level (low, medium, high, critical).
+- **Summary**: Brief description of what's failing
+- **Root Cause**: The underlying issue causing the failure (cite evidence)
+- **Supporting Evidence**: Key observations from your investigation (log excerpts, event messages)
+- **Remediation Steps**: Concrete actions to resolve the issue
+- **Severity**: low, medium, high, or critical
 
 FORMAT YOUR RESPONSE IN CLEAN MARKDOWN:
 - Use headings (##, ###) to structure sections
 - Use bullet points for lists
 - Use **bold** for emphasis (ensure asterisks are directly adjacent to text, no spaces: **word** not ** word **)
 - Use `code` formatting for resource names, commands, and technical terms
-- Use code blocks (```) for multi-line logs or YAML
+- Use code blocks (```) for multi-line logs or YAML excerpts
 - Make your response easy to read and visually organized
 - IMPORTANT: Do not mix single and double asterisks (use **bold** consistently, never *bold *)
 - When writing numbered lists with bold items, format as: **1. Item** not *1. *Item**
 
-Do not give up easily. Dig deep into logs and events.
+Do not give up easily. Dig deep into logs and events. Be thorough and systematic.
 """
 
 class ToolMetricsCallback(BaseCallbackHandler):
     """Callback handler to track tool usage metrics."""
-    
+
     def on_tool_start(self, serialized: dict[str, Any], input_str: str, **kwargs: Any) -> None:
         """Track when a tool is called."""
         tool_name = serialized.get("name", "unknown")
@@ -127,28 +155,25 @@ class ToolMetricsCallback(BaseCallbackHandler):
         logger.debug(f"Tool called: {tool_name}")
 
 class InvestigatorAgent:
-    def __init__(self, model_name: str = "gpt-4-turbo-preview", api_key: str | None = None, 
+    def __init__(self, model_name: str = "gpt-4-turbo-preview", api_key: str | None = None,
                  api_base: str | None = None, api_version: str | None = None,
                  azure_deployment: str | None = None):
         self._model_name = model_name
         self._enabled = api_key is not None or model_name == "mock"
-        
+
         if self._enabled and model_name != "mock":
-            # Configure for Azure OpenAI if api_base is provided
-            if api_base:
-                # For Azure OpenAI, use AzureChatOpenAI instead
-                from langchain_openai import AzureChatOpenAI
-                llm = AzureChatOpenAI(
-                    model=azure_deployment or model_name,
-                    azure_deployment=azure_deployment or model_name,
-                    temperature=1,
-                    api_key=api_key,
-                    azure_endpoint=api_base,
-                    api_version=api_version,
-                )
-            else:
-                llm = ChatOpenAI(model=model_name, temperature=1, api_key=api_key)
-            
+            from .llm import create_llm
+            from .config import Settings
+            # Build a minimal Settings-like object for the factory
+            _settings = Settings(
+                langchain_model_name=model_name,
+                openai_api_key=api_key,
+                openai_api_base=api_base,
+                openai_api_version=api_version,
+                azure_deployment=azure_deployment,
+            )
+            llm = create_llm(_settings, temperature=1.0)
+
             tools = [
                 k8s_get_resources,
                 k8s_describe,
@@ -187,7 +212,7 @@ class InvestigatorAgent:
                 get_namespace_pods_summary,
                 get_namespace_events,
             ]
-            
+
             # Use the new create_agent API with recursion limit
             self._agent = create_agent(
                 model=llm,
@@ -252,7 +277,7 @@ class InvestigatorAgent:
                     "'Feel free to ask me any questions by replying in this thread!' or "
                     "'If you have more questions, just ask here in the thread!'"
                 )
-            
+
             if alert_context:
                 user_message += f"\n\nCONTEXT: The investigation was triggered by the following alerts:\n{alert_context.get('summary', '')}\n"
                 alerts = alert_context.get("alerts", [])
@@ -261,32 +286,32 @@ class InvestigatorAgent:
                     for a in alerts:
                         user_message += f"- {a.get('name')} ({a.get('severity')}): {a.get('description')}\n"
                 user_message += "\nPlease prioritize investigating the root cause of these alerts."
-            
+
             if trigger_context:
                 user_message += "\n\nTRIGGER CONTEXT (what the watcher observed):\n"
                 if trigger_context.get("trigger_reason"):
                     user_message += f"- Trigger reason: {trigger_context['trigger_reason']}\n"
                 if trigger_context.get("observed_failures"):
-                    user_message += f"- Initial failure observations:\n"
+                    user_message += "- Initial failure observations:\n"
                     for obs in trigger_context["observed_failures"]:
                         user_message += f"  • {obs}\n"
                 if trigger_context.get("transient_failures_detected"):
-                    user_message += f"- Transient failures were detected before this investigation.\n"
-                    user_message += f"  These issues may have self-healed. Please verify current state and note any recovery.\n"
+                    user_message += "- Transient failures were detected before this investigation.\n"
+                    user_message += "  These issues may have self-healed. Please verify current state and note any recovery.\n"
                 if trigger_context.get("time_to_failure_seconds"):
                     user_message += f"- Time from rollout start to failure: {trigger_context['time_to_failure_seconds']} seconds\n"
                 if trigger_context.get("failure_type"):
                     user_message += f"- Failure type: {trigger_context['failure_type']}\n"
-            
+
             # Invoke the agent with the new format
             result = self._agent.invoke(
                 {"messages": [{"role": "user", "content": user_message}]},
                 config={"callbacks": [ToolMetricsCallback()]}
             )
-            
+
             # Extract the final message content and count iterations
             messages = result.get("messages", [])
-            
+
             # Count iterations: number of AI messages (excluding the initial user message)
             iteration_count = sum(1 for msg in messages if hasattr(msg, 'type') and msg.type == 'ai')
             AGENT_ITERATIONS.observe(iteration_count)
@@ -297,7 +322,7 @@ class InvestigatorAgent:
                 output_text = messages[-1].content if hasattr(last_message, 'content') else str(last_message)
             else:
                 output_text = "No response from agent"
-            
+
             AGENT_INVESTIGATIONS.labels(status='success').inc()
             summary = f"Follow-up for {deployment}" if question else f"Agent Investigation for {deployment}"
             return Analysis(
@@ -306,7 +331,7 @@ class InvestigatorAgent:
                 recommended_steps=["See detailed analysis above."],
                 severity="medium"
             )
-            
+
         except Exception as e:
             logger.error(f"Agent investigation failed: {e}", exc_info=True)
             AGENT_INVESTIGATIONS.labels(status='error').inc()

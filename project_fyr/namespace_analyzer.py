@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """On-demand namespace analysis tool."""
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime
+from project_fyr import utcnow
 from typing import Optional
 
 from kubernetes import client
@@ -16,7 +19,7 @@ logger = logging.getLogger(__name__)
 class NamespaceAnalyzer:
     """
     Analyzes a namespace on-demand to identify issues with deployments and pods.
-    
+
     This class provides comprehensive namespace analysis including:
     - Deployment health status
     - Pod issues (CrashLoopBackOff, ImagePullBackOff, etc.)
@@ -24,7 +27,7 @@ class NamespaceAnalyzer:
     - Resource constraints
     - AI-powered root cause analysis
     """
-    
+
     def __init__(
         self,
         model_name: str,
@@ -35,7 +38,7 @@ class NamespaceAnalyzer:
     ):
         """
         Initialize the NamespaceAnalyzer.
-        
+
         Args:
             model_name: LangChain model name (e.g., "gpt-4o-mini")
             api_key: OpenAI API key
@@ -50,7 +53,7 @@ class NamespaceAnalyzer:
             api_version=api_version,
             azure_deployment=azure_deployment,
         )
-    
+
     def analyze_namespace(
         self,
         namespace: str,
@@ -59,12 +62,12 @@ class NamespaceAnalyzer:
     ) -> dict:
         """
         Perform comprehensive analysis of a namespace.
-        
+
         Args:
             namespace: Kubernetes namespace name
             core_v1: Kubernetes CoreV1Api client
             apps_v1: Kubernetes AppsV1Api client
-        
+
         Returns:
             Dictionary containing:
             - summary: High-level summary of issues
@@ -75,21 +78,21 @@ class NamespaceAnalyzer:
             - timestamp: Analysis timestamp
         """
         logger.info(f"Starting namespace analysis for: {namespace}")
-        
+
         try:
             # Gather deployment information
             deployments = self._get_deployment_status(namespace, apps_v1, core_v1)
-            
+
             # Gather pod information
             pods = self._get_pod_status(namespace, core_v1)
-            
+
             # Get recent events
             events = self._get_recent_events(namespace, core_v1)
-            
+
             # Count issues
             failing_deployments = sum(1 for d in deployments if not d["healthy"])
             unhealthy_pods = sum(1 for p in pods if not p["healthy"])
-            
+
             # Prepare summary
             summary = {
                 "namespace": namespace,
@@ -99,7 +102,7 @@ class NamespaceAnalyzer:
                 "unhealthy_pods": unhealthy_pods,
                 "has_issues": failing_deployments > 0 or unhealthy_pods > 0,
             }
-            
+
             # Generate AI analysis if there are issues
             ai_analysis = None
             if summary["has_issues"]:
@@ -109,16 +112,16 @@ class NamespaceAnalyzer:
                     pods=pods,
                     events=events,
                 )
-            
+
             return {
                 "summary": summary,
                 "deployments": deployments,
                 "pods": pods,
                 "events": events[:20],  # Limit to 20 most recent events
                 "analysis": ai_analysis,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": utcnow().isoformat(),
             }
-        
+
         except Exception as e:
             logger.error(f"Error analyzing namespace {namespace}: {e}", exc_info=True)
             return {
@@ -131,9 +134,9 @@ class NamespaceAnalyzer:
                 "pods": [],
                 "events": [],
                 "analysis": f"Error during analysis: {str(e)}",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": utcnow().isoformat(),
             }
-    
+
     def _get_deployment_status(
         self,
         namespace: str,
@@ -142,16 +145,16 @@ class NamespaceAnalyzer:
     ) -> list[dict]:
         """Get status of all deployments in namespace."""
         deployments = []
-        
+
         try:
             deployment_list = apps_v1.list_namespaced_deployment(namespace)
-            
+
             for dep in deployment_list.items:
                 ready_replicas = dep.status.ready_replicas or 0
                 desired_replicas = dep.spec.replicas or 0
-                
+
                 is_healthy = ready_replicas == desired_replicas and desired_replicas > 0
-                
+
                 # Get conditions
                 conditions = []
                 if dep.status.conditions:
@@ -164,7 +167,7 @@ class NamespaceAnalyzer:
                         }
                         for c in dep.status.conditions
                     ]
-                
+
                 deployments.append({
                     "name": dep.metadata.name,
                     "ready_replicas": ready_replicas,
@@ -172,56 +175,56 @@ class NamespaceAnalyzer:
                     "healthy": is_healthy,
                     "conditions": conditions,
                 })
-        
+
         except Exception as e:
             logger.error(f"Error getting deployments for {namespace}: {e}")
-        
+
         return deployments
-    
+
     def _get_pod_status(self, namespace: str, core_v1: client.CoreV1Api) -> list[dict]:
         """Get status of all pods in namespace."""
         pods = []
-        
+
         try:
             pod_list = core_v1.list_namespaced_pod(namespace)
-            
+
             for pod in pod_list.items:
                 phase = pod.status.phase
-                
+
                 # Check if pod is from a Job (completed Jobs should not be treated as unhealthy)
                 owner_kind = None
                 if pod.metadata.owner_references:
                     owner_kind = pod.metadata.owner_references[0].kind
-                
+
                 # Check for common issues
                 # Succeeded pods from Jobs/CronJobs are healthy (completed successfully)
                 is_completed_job = phase == "Succeeded" and owner_kind in ["Job", "CronJob"]
                 is_healthy = phase == "Running" or is_completed_job
                 issues = []
-                
+
                 if phase in ["Pending", "Failed", "Unknown"]:
                     is_healthy = False
                     issues.append(f"Pod in {phase} state")
-                
+
                 # Check container statuses (but skip if this is a completed job)
                 if pod.status.container_statuses and not is_completed_job:
                     for cs in pod.status.container_statuses:
                         if not cs.ready:
                             is_healthy = False
-                            
+
                             if cs.state.waiting:
                                 reason = cs.state.waiting.reason
                                 issues.append(f"Container waiting: {reason}")
-                            
+
                             if cs.state.terminated:
                                 reason = cs.state.terminated.reason
                                 exit_code = cs.state.terminated.exit_code
                                 issues.append(f"Container terminated: {reason} (exit {exit_code})")
-                        
+
                         # Check restart count
                         if cs.restart_count > 5:
                             issues.append(f"High restart count: {cs.restart_count}")
-                
+
                 pods.append({
                     "name": pod.metadata.name,
                     "phase": phase,
@@ -231,26 +234,26 @@ class NamespaceAnalyzer:
                         cs.restart_count for cs in (pod.status.container_statuses or [])
                     ),
                 })
-        
+
         except Exception as e:
             logger.error(f"Error getting pods for {namespace}: {e}")
-        
+
         return pods
-    
+
     def _get_recent_events(self, namespace: str, core_v1: client.CoreV1Api) -> list[dict]:
         """Get recent events from namespace."""
         events = []
-        
+
         try:
             event_list = core_v1.list_namespaced_event(namespace)
-            
+
             # Sort by timestamp (most recent first)
             sorted_events = sorted(
                 event_list.items,
                 key=lambda e: e.last_timestamp or e.event_time or datetime.min,
                 reverse=True,
             )
-            
+
             for event in sorted_events[:50]:  # Get last 50 events
                 events.append({
                     "type": event.type,
@@ -264,12 +267,12 @@ class NamespaceAnalyzer:
                         else None
                     ),
                 })
-        
+
         except Exception as e:
             logger.error(f"Error getting events for {namespace}: {e}")
-        
+
         return events
-    
+
     def _generate_ai_analysis(
         self,
         namespace: str,
@@ -285,16 +288,16 @@ class NamespaceAnalyzer:
                 "",
                 "OVERVIEW:",
             ]
-            
+
             failing_deployments = [d for d in deployments if not d["healthy"]]
             unhealthy_pods = [p for p in pods if not p["healthy"]]
             warning_events = [e for e in events[:20] if e["type"] in ["Warning", "Error"]]
-            
+
             context_parts.append(f"- Total deployments: {len(deployments)} ({len(failing_deployments)} unhealthy)")
             context_parts.append(f"- Total pods: {len(pods)} ({len(unhealthy_pods)} unhealthy)")
             context_parts.append(f"- Recent warning/error events: {len(warning_events)}")
             context_parts.append("")
-            
+
             if failing_deployments:
                 context_parts.append("FAILING DEPLOYMENTS:")
                 for dep in failing_deployments[:5]:  # Top 5
@@ -302,7 +305,7 @@ class NamespaceAnalyzer:
                         f"  • {dep['name']}: {dep['ready_replicas']}/{dep['desired_replicas']} replicas ready"
                     )
                 context_parts.append("")
-            
+
             if unhealthy_pods:
                 context_parts.append("UNHEALTHY PODS (sample):")
                 for pod in unhealthy_pods[:5]:  # Top 5
@@ -310,7 +313,7 @@ class NamespaceAnalyzer:
                     if pod["issues"]:
                         context_parts.append(f"    Issues: {', '.join(pod['issues'][:2])}")
                 context_parts.append("")
-            
+
             if warning_events:
                 context_parts.append("RECENT WARNINGS/ERRORS (sample):")
                 for event in warning_events[:5]:  # Top 5
@@ -318,9 +321,9 @@ class NamespaceAnalyzer:
                         f"  • {event['reason']}: {event['message'][:80]}"
                     )
                 context_parts.append("")
-            
+
             context = "\n".join(context_parts)
-            
+
             # Build the investigation prompt - this will trigger the agent's tool-calling capabilities
             investigation_request = (
                 f"Perform a comprehensive investigation of namespace '{namespace}'.\n\n"
@@ -354,7 +357,7 @@ class NamespaceAnalyzer:
                 f"Focus on the most critical issues first. Use k8s_logs, k8s_events, "
                 f"k8s_describe and other tools as needed to gather evidence."
             )
-            
+
             # Use the agent's invoke method with proper message format for full tool access
             if hasattr(self.investigator, '_agent') and self.investigator._agent:
                 from .agent import ToolMetricsCallback
@@ -363,7 +366,7 @@ class NamespaceAnalyzer:
                     {"messages": [{"role": "user", "content": investigation_request}]},
                     config={"callbacks": [ToolMetricsCallback()]}
                 )
-                
+
                 # Extract the final analysis from messages
                 messages = result.get("messages", [])
                 if messages:
@@ -379,8 +382,8 @@ class NamespaceAnalyzer:
                 # Agent not available
                 error_msg = f"Agent not available for namespace {namespace} - investigation cannot proceed"
                 logger.error(error_msg)
-                return f"AI agent not initialized. Please check OpenAI API configuration."
-        
+                return "AI agent not initialized. Please check OpenAI API configuration."
+
         except Exception as e:
             logger.error(f"Error generating AI analysis for {namespace}: {e}", exc_info=True)
             return f"AI analysis failed: {str(e)}"

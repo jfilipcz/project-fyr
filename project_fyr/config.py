@@ -1,7 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Settings for the Project Fyr service."""
 
 from typing import Optional, List
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -28,7 +30,13 @@ class Settings(BaseSettings):
         default=300,
         description="Seconds to wait before starting speculative analysis on ROLLING_OUT deployments (default: 5 minutes)"
     )
-    
+
+    # Annotation prefix for Kubernetes labels/annotations
+    annotation_prefix: str = Field(
+        default="project-fyr.io",
+        description="Domain prefix for custom Kubernetes annotations (e.g. project-fyr.io/requestor-email)"
+    )
+
     # Watch behavior
     watch_all_namespaces: bool = Field(
         default=False,
@@ -38,14 +46,14 @@ class Settings(BaseSettings):
         default=True,
         description="If True, allow namespace-level project-fyr/enabled annotation to enable watching all deployments in that namespace."
     )
-    
+
     # System Namespaces - Filtered from monitoring and display
     # Stored as comma-separated string to avoid JSON parsing issues from env vars
     system_namespaces_str: str = Field(
         default="kube-system,kube-public,kube-node-lease,default,monitoring,logging,ingress-nginx,cert-manager,flux-system,argocd,project-fyr,istio-system,elastic-system",
         description="System namespaces to exclude from monitoring and display (comma-separated)"
     )
-    
+
     @property
     def system_namespaces(self) -> List[str]:
         """Get system_namespaces as a list."""
@@ -82,7 +90,7 @@ class Settings(BaseSettings):
         default=5,
         description="Time window for counting container restarts"
     )
-    
+
     # Rate Limiting (configurable via env: MAX_INVESTIGATIONS_PER_NAMESPACE_PER_HOUR, MAX_INVESTIGATIONS_PER_CLUSTER_PER_HOUR)
     max_investigations_per_namespace_per_hour: int = Field(
         default=10,
@@ -99,7 +107,7 @@ class Settings(BaseSettings):
     alert_batch_min_count: int = Field(default=1)
 
     slack_mock_log_file: Optional[str] = Field(default=None)
-    
+
     # Slack Socket Mode (for internal apps without public URL)
     slack_app_token: Optional[str] = Field(
         default=None,
@@ -127,15 +135,15 @@ class Settings(BaseSettings):
         default=3600,
         description="TTL for Slack user/channel routing cache"
     )
-    
+
     # Fyr Dashboard URL (for deep links in Slack messages)
     dashboard_base_url: Optional[str] = Field(
         default=None,
-        description="Base URL for Fyr dashboard (e.g., https://fyr.internal.company.com)"
+        description="Base URL for Fyr dashboard (e.g., https://fyr.example.com)"
     )
-    
+
     prometheus_url: Optional[str] = Field(default=None, description="Prometheus server URL")
-    
+
     # Overview Insights Cache
     insights_cache_ttl_minutes: int = Field(
         default=60,
@@ -151,7 +159,7 @@ class Settings(BaseSettings):
         default=False,
         description="Show triage assignment block in Slack notifications"
     )
-    
+
     # Authentication
     auth_enabled: bool = Field(
         default=False,
@@ -161,11 +169,11 @@ class Settings(BaseSettings):
         default="hybrid",
         description="Authentication mode: 'sso', 'local', or 'hybrid'"
     )
-    
+
     # SSO Configuration
     sso_provider: str = Field(
-        default="entra",
-        description="SSO provider: 'entra', 'okta', 'generic_oidc'"
+        default="none",
+        description="SSO provider: 'none', 'entra', 'generic_oidc'"
     )
     sso_tenant_id: Optional[str] = Field(
         default=None,
@@ -179,7 +187,7 @@ class Settings(BaseSettings):
         default=None,
         description="SSO client secret (for OIDC flows)"
     )
-    
+
     # Generic OIDC Configuration
     oidc_issuer: Optional[str] = Field(
         default=None,
@@ -193,7 +201,7 @@ class Settings(BaseSettings):
         default=None,
         description="OIDC audience (e.g., api://your-app)"
     )
-    
+
     # Local Authentication
     local_auth_enabled: bool = Field(
         default=True,
@@ -211,7 +219,7 @@ class Settings(BaseSettings):
         default=168,
         description="Session expiry time in hours (7 days default)"
     )
-    
+
     # Default Admin User
     admin_username: str = Field(
         default="admin",
@@ -225,7 +233,7 @@ class Settings(BaseSettings):
         default="admin@example.com",
         description="Default admin email"
     )
-    
+
     # Authentication Excluded Paths
     auth_exclude_paths: str = Field(
         default="/health,/metrics,/static,/api/webhook",

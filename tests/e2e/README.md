@@ -54,7 +54,7 @@ Set these before running tests:
 
 ```bash
 # Dashboard URL
-export FYR_DASHBOARD_URL=https://fyr.ci.example.com
+export FYR_DASHBOARD_URL=https://fyr.example.com
 
 # SSO Credentials (for auth tests)
 export TEST_SSO_EMAIL=test@example.com

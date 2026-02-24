@@ -39,3 +39,16 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["project_fyr"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:pydantic.*",
+    "ignore::DeprecationWarning:starlette.*",
+    "ignore::DeprecationWarning:fastapi.*",
+    "ignore::DeprecationWarning:sqlalchemy.*",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120

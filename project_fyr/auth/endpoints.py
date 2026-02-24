@@ -1,8 +1,10 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Authentication endpoints for login/logout and user management."""
 
 import logging
 import secrets
-from datetime import datetime
+from project_fyr import utcnow
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -59,7 +61,7 @@ async def login(
 ):
     """
     Authenticate user with username and password.
-    
+
     Returns JWT access token on successful authentication.
     Sets session cookie for browser-based access.
     """
@@ -69,29 +71,29 @@ async def login(
             status_code=403,
             detail="Local authentication is disabled"
         )
-    
+
     # Initialize local auth provider
     local_auth = LocalAuthProvider(
         jwt_secret=settings.local_auth_jwt_secret,
         jwt_expiry_hours=settings.local_auth_jwt_expiry_hours
     )
-    
+
     # Authenticate user
     user = local_auth.authenticate_user(db, credentials.username, credentials.password)
-    
+
     if not user:
         logger.warning(f"Failed login attempt for username: {credentials.username}")
         raise HTTPException(
             status_code=401,
             detail="Invalid username or password"
         )
-    
+
     # Update last login timestamp
-    user.last_login = datetime.utcnow()
+    user.last_login = utcnow()
     db.commit()
-    
+
     logger.info(f"User logged in: {user.username}")
-    
+
     # Create JWT token
     token = local_auth.create_access_token(
         user_id=user.id,
@@ -99,7 +101,7 @@ async def login(
         name=user.full_name or user.username,
         is_admin=user.is_admin
     )
-    
+
     # Set HTTP-only cookie for browser-based authentication
     response.set_cookie(
         key="fyr_session",
@@ -109,7 +111,7 @@ async def login(
         samesite="lax",
         max_age=settings.local_auth_jwt_expiry_hours * 3600
     )
-    
+
     return LoginResponse(
         access_token=token,
         user={
@@ -126,7 +128,7 @@ async def login(
 async def logout(response: Response):
     """
     Logout user by clearing session cookie.
-    
+
     Client should also discard any stored tokens.
     """
     response.delete_cookie("fyr_session")
@@ -138,7 +140,7 @@ async def logout(response: Response):
 async def get_current_user(request: Request):
     """
     Get currently authenticated user information.
-    
+
     Requires valid authentication (populated by middleware).
     """
     if not hasattr(request.state, "user"):
@@ -146,9 +148,9 @@ async def get_current_user(request: Request):
             status_code=401,
             detail="Not authenticated"
         )
-    
+
     user_info = request.state.user
-    
+
     return UserInfo(
         id=user_info.get("user_id"),
         username=user_info.get("username"),
@@ -163,7 +165,7 @@ async def get_current_user(request: Request):
 async def auth_status():
     """
     Get authentication configuration status.
-    
+
     Returns which authentication methods are enabled.
     """
     return {
@@ -179,7 +181,7 @@ async def auth_status():
 async def sso_login(request: Request, db: Session = Depends(get_db_session)):
     """
     Initiate SSO login flow.
-    
+
     Redirects to the SSO provider's authorization endpoint.
     """
     if settings.auth_mode not in ["sso", "hybrid"]:
@@ -187,7 +189,7 @@ async def sso_login(request: Request, db: Session = Depends(get_db_session)):
             status_code=403,
             detail="SSO authentication is not enabled"
         )
-    
+
     if settings.sso_provider == "entra":
         # Microsoft Entra ID (Azure AD) OAuth flow
         if not settings.sso_tenant_id or not settings.sso_client_id:
@@ -195,25 +197,25 @@ async def sso_login(request: Request, db: Session = Depends(get_db_session)):
                 status_code=500,
                 detail="Entra ID SSO is not properly configured"
             )
-        
+
         # Generate and store state for CSRF protection
         state = secrets.token_urlsafe(32)
         nonce = secrets.token_urlsafe(32)
-        
+
         # Store state in session (using database)
         session = UserSession(
             session_id=state,
             user_id=None,  # No user yet
             provider="entra",
-            expires_at=datetime.utcnow()
+            expires_at=utcnow()
         )
         db.add(session)
         db.commit()
-        
+
         # Build authorization URL
         # Use request.url to get the scheme from the original request (handles HTTPS behind proxy)
         redirect_uri = f"https://{request.url.hostname}/auth/callback"
-        
+
         auth_params = {
             "client_id": settings.sso_client_id,
             "response_type": "id_token",
@@ -223,19 +225,23 @@ async def sso_login(request: Request, db: Session = Depends(get_db_session)):
             "state": state,
             "nonce": nonce,
         }
-        
+
         auth_url = (
             f"https://login.microsoftonline.com/{settings.sso_tenant_id}/oauth2/v2.0/authorize?"
             + urlencode(auth_params)
         )
-        
+
         logger.info(f"Redirecting to Entra ID authorization: {auth_url}")
         return RedirectResponse(url=auth_url, status_code=302)
-    
+
     else:
         raise HTTPException(
             status_code=501,
-            detail=f"SSO provider '{settings.sso_provider}' is not yet implemented"
+            detail=(
+                f"Browser-based SSO login flow for '{settings.sso_provider}' is not implemented. "
+                "Use a reverse proxy (nginx, Traefik) to handle the OIDC authorization flow "
+                "and forward the JWT token in the Authorization header."
+            ),
         )
 
 
@@ -252,14 +258,14 @@ async def sso_callback(
 ):
     """
     Handle SSO callback from identity provider.
-    
+
     Validates the token and creates/updates user session.
     """
     # Check for OAuth errors
     if error:
         logger.error(f"SSO error: {error} - {error_description}")
         return RedirectResponse(url=f"/login?error={error}", status_code=302)
-    
+
     # Get form data for POST callback
     if request.method == "POST":
         form_data = await request.form()
@@ -268,43 +274,43 @@ async def sso_callback(
         logger.debug(f"POST callback - form keys: {list(form_data.keys())}")
     else:
         logger.debug(f"GET callback - query params: {dict(request.query_params)}")
-    
+
     if not id_token or not state:
         logger.error(f"Missing id_token or state in SSO callback. id_token present: {bool(id_token)}, state present: {bool(state)}")
         return RedirectResponse(url="/login?error=invalid_response", status_code=302)
-    
+
     # Verify state (CSRF protection)
     session_record = db.query(UserSession).filter_by(session_id=state).first()
     if not session_record:
         logger.error(f"Invalid state in SSO callback: {state}")
         return RedirectResponse(url="/login?error=invalid_state", status_code=302)
-    
+
     # Validate the ID token
     try:
         from .providers.entra import EntraIDProvider
-        
+
         entra_provider = EntraIDProvider(
             tenant_id=settings.sso_tenant_id,
             client_id=settings.sso_client_id
         )
-        
+
         token_data = await entra_provider.validate_token(id_token)
-        
+
         if not token_data:
             logger.error("Invalid token from Entra ID")
             return RedirectResponse(url="/login?error=invalid_token", status_code=302)
-        
+
         # Extract user information
         email = token_data.get("email") or token_data.get("preferred_username")
         name = token_data.get("name", email.split("@")[0] if email else "Unknown")
-        
+
         if not email:
             logger.error("No email in token from Entra ID")
             return RedirectResponse(url="/login?error=no_email", status_code=302)
-        
+
         # Find or create user
         user = db.query(User).filter_by(email=email).first()
-        
+
         if not user:
             # Auto-create user on first SSO login (in hybrid mode)
             user = User(
@@ -319,26 +325,26 @@ async def sso_callback(
             db.commit()
             db.refresh(user)
             logger.info(f"Created new user from SSO: {email}")
-        
+
         # Update last login
-        user.last_login = datetime.utcnow()
+        user.last_login = utcnow()
         db.commit()
-        
+
         logger.info(f"SSO login successful for: {email}")
-        
+
         # Create JWT token for this session
         local_auth = LocalAuthProvider(
             jwt_secret=settings.local_auth_jwt_secret,
             jwt_expiry_hours=settings.local_auth_jwt_expiry_hours
         )
-        
+
         token = local_auth.create_access_token(
             user_id=user.id,
             email=user.email,
             name=user.full_name or user.username,
             is_admin=user.is_admin
         )
-        
+
         # Set HTTP-only cookie
         response = RedirectResponse(url="/", status_code=302)
         response.set_cookie(
@@ -349,14 +355,13 @@ async def sso_callback(
             samesite="lax",
             max_age=settings.local_auth_jwt_expiry_hours * 3600
         )
-        
+
         # Clean up state session
         db.delete(session_record)
         db.commit()
-        
+
         return response
-        
+
     except Exception as e:
         logger.error(f"Error processing SSO callback: {e}", exc_info=True)
         return RedirectResponse(url="/login?error=processing_error", status_code=302)
-

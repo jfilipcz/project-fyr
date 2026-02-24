@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Slack notification helper."""
 
 from __future__ import annotations
@@ -111,7 +113,8 @@ def _extract_requestor_email(metadata: dict | None) -> str | None:
     if email := metadata.get("requestor_email"):
         return email
     annotations = metadata.get("namespace_annotations") or metadata.get("metadata_json") or {}
-    return annotations.get("example.com/requestor-email")
+    from .config import settings as _settings
+    return annotations.get(f"{_settings.annotation_prefix}/requestor-email")
 
 
 def _extract_owner_channel(metadata: dict | None) -> str | None:
@@ -120,7 +123,9 @@ def _extract_owner_channel(metadata: dict | None) -> str | None:
     if owner := metadata.get("owner_channel"):
         return owner
     labels = metadata.get("deployment_labels") or metadata.get("labels") or {}
-    return labels.get("example.com/owner-channel") or metadata.get("example.com/owner-channel")
+    from .config import settings as _settings
+    _key = f"{_settings.annotation_prefix}/owner-channel"
+    return labels.get(_key) or metadata.get(_key)
 
 
 def _extract_namespace_channel(metadata: dict | None) -> str | None:
@@ -128,8 +133,9 @@ def _extract_namespace_channel(metadata: dict | None) -> str | None:
         return None
     if channel := metadata.get("namespace_channel"):
         return channel
+    from .config import settings as _settings
     annotations = metadata.get("namespace_annotations") or metadata.get("metadata_json") or {}
-    return annotations.get("project-fyr/slack-channel")
+    return annotations.get(f"{_settings.annotation_prefix}/slack-channel")
 
 
 class SlackNotifier:
@@ -154,7 +160,7 @@ class SlackNotifier:
         self._cache_lock = threading.Lock()
         self._user_id_cache: dict[str, tuple[float, str | None]] = {}
         self._dm_channel_cache: dict[str, tuple[float, str]] = {}
-        
+
         # Create WebClient with custom base_url if provided (for mock service)
         if token and not self._mock_mode:
             if base_url:
@@ -180,12 +186,12 @@ class SlackNotifier:
         # Use enhanced blocks with buttons if rollout_id provided
         if rollout_id is not None:
             from .slack_blocks import build_failure_notification
-            
+
             # Extract metadata fields
             meta = metadata or {}
             namespace = meta.get("namespace")
             deployment = meta.get("deployment")
-            
+
             # Parse namespace/deployment from rollout_ref if not in metadata
             if not namespace and "/" in rollout_ref:
                 parts = rollout_ref.split("/", 1)
@@ -194,7 +200,7 @@ class SlackNotifier:
                     deployment = parts[1] if len(parts) > 1 else None
             if deployment and "#" in deployment:
                 deployment = deployment.split("#", 1)[0]
-            
+
             payload = build_failure_notification(
                 rollout_ref=rollout_ref,
                 analysis=analysis,
@@ -379,10 +385,10 @@ class SlackNotifier:
         target: SlackTarget,
     ) -> None:
         import json
-        from datetime import datetime
+        from . import utcnow
 
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utcnow().isoformat(),
             "channel": channel,
             "type": kind,
             "target": {"kind": target.kind, "value": target.value},

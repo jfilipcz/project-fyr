@@ -1,10 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Slash command handlers for Fyr Slack integration."""
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from datetime import datetime
+from project_fyr import utcnow
 
 from slack_bolt import App
 
@@ -24,23 +26,23 @@ logger = logging.getLogger(__name__)
 
 def register_commands(app: App) -> None:
     """Register all slash command handlers."""
-    
+
     @app.command("/fyr")
     def handle_fyr_command(ack, command, respond, client):
         """Main /fyr command router."""
         ack()  # Acknowledge immediately (3s timeout)
-        
+
         text = command.get("text", "").strip()
         user_id = command.get("user_id")
         channel_id = command.get("channel_id")
-        
+
         logger.info(f"Received /fyr command: '{text}' from user {user_id} in channel {channel_id}")
-        
+
         # Parse subcommand
         parts = text.split()
         subcommand = parts[0].lower() if parts else "help"
         args = parts[1:] if len(parts) > 1 else []
-        
+
         try:
             if subcommand == "help" or subcommand == "":
                 handle_help(respond)
@@ -72,18 +74,18 @@ def handle_status(respond) -> None:
     """Handle /fyr status command."""
     try:
         engine = init_db(settings.database_url)
-        repo = RolloutRepo(engine)
-        
+        repo = RolloutRepo(engine, annotation_prefix=settings.annotation_prefix)
+
         stats = repo.get_stats(hours=24, exclude_system=True)
-        
+
         # Get recent failures with details
         recent_failures = []
         failures = repo.list_by_status("failed", limit=5, exclude_system=True)
-        
+
         for f in failures:
             time_ago = _format_time_ago(f.started_at) if f.started_at else "unknown"
             cause = "Unknown"
-            
+
             # Try to get cause from analysis
             if f.analysis_id:
                 analysis_record = repo.get_analysis(f.analysis_id)
@@ -91,14 +93,14 @@ def handle_status(respond) -> None:
                     cause = analysis_record.analysis.get("likely_cause", "Unknown")[:50]
                     if len(analysis_record.analysis.get("likely_cause", "")) > 50:
                         cause += "..."
-            
+
             recent_failures.append({
                 "deployment": f.deployment,
                 "namespace": f.namespace,
                 "time_ago": time_ago,
                 "cause": cause,
             })
-        
+
         respond(
             blocks=build_status_response(
                 cluster=settings.k8s_cluster_name,
@@ -118,21 +120,21 @@ def handle_namespace(respond, args: list) -> None:
     if not args:
         respond(blocks=build_error_response("Please specify a namespace: `/fyr namespace <namespace-name>`"))
         return
-    
+
     namespace = args[0]
-    
+
     try:
         from kubernetes import client, config as k8s_config
-        
+
         # Load k8s config
         try:
             k8s_config.load_incluster_config()
-        except:
+        except Exception:
             k8s_config.load_kube_config()
-        
+
         core_v1 = client.CoreV1Api()
         apps_v1 = client.AppsV1Api()
-        
+
         # Check namespace exists
         try:
             ns = core_v1.read_namespace(namespace)
@@ -142,34 +144,34 @@ def handle_namespace(respond, args: list) -> None:
                 respond(blocks=build_error_response(f"Namespace `{namespace}` not found"))
                 return
             raise
-        
+
         # Get deployments
         deployments = apps_v1.list_namespaced_deployment(namespace).items
         deployments_total = len(deployments)
         deployments_healthy = 0
         deployments_degraded = 0
         issues = []
-        
+
         for d in deployments:
             ready = d.status.ready_replicas or 0
             desired = d.spec.replicas or 0
-            
+
             if ready >= desired and desired > 0:
                 deployments_healthy += 1
             else:
                 deployments_degraded += 1
                 issues.append(f"{d.metadata.name}: {ready}/{desired} replicas ready")
-        
+
         # Get pods for restart info
         pods = core_v1.list_namespaced_pod(namespace).items
         total_restarts = 0
         for pod in pods:
             for cs in (pod.status.container_statuses or []):
                 total_restarts += cs.restart_count
-        
+
         if total_restarts > 10:
             issues.append(f"High restart rate: {total_restarts} restarts across pods")
-        
+
         # Get resource quotas
         quotas = {}
         quota_list = core_v1.list_namespaced_resource_quota(namespace).items
@@ -182,9 +184,9 @@ def handle_namespace(respond, args: list) -> None:
                         used_val = _parse_resource_value(used)
                         limit_val = _parse_resource_value(limit)
                         quotas[resource] = {"used": used_val, "limit": limit_val}
-                    except:
+                    except Exception:
                         pass
-        
+
         respond(
             blocks=build_namespace_response(
                 namespace=namespace,
@@ -209,18 +211,18 @@ def handle_investigate(respond, client, channel_id: str, user_id: str, args: lis
             "`/fyr investigate <namespace> [deployment]`"
         ))
         return
-    
+
     namespace = args[0]
     deployment = args[1] if len(args) > 1 else None
-    
+
     # Acknowledge with "investigating" message
     respond(blocks=build_investigation_started_response(namespace, deployment))
-    
+
     try:
         if deployment:
             # Deployment-specific investigation
             from .agent import InvestigatorAgent
-            
+
             agent = InvestigatorAgent(
                 model_name=settings.langchain_model_name,
                 api_key=settings.openai_api_key,
@@ -228,21 +230,21 @@ def handle_investigate(respond, client, channel_id: str, user_id: str, args: lis
                 api_version=settings.openai_api_version,
                 azure_deployment=settings.azure_deployment
             )
-            
+
             analysis = agent.investigate(deployment, namespace)
         else:
             # Namespace-level investigation
             from kubernetes import client as k8s_client, config as k8s_config
             from .namespace_analyzer import NamespaceAnalyzer
-            
+
             try:
                 k8s_config.load_incluster_config()
-            except:
+            except Exception:
                 k8s_config.load_kube_config()
-            
+
             core_v1 = k8s_client.CoreV1Api()
             apps_v1 = k8s_client.AppsV1Api()
-            
+
             analyzer = NamespaceAnalyzer(
                 model_name=settings.langchain_model_name,
                 api_key=settings.openai_api_key,
@@ -250,20 +252,20 @@ def handle_investigate(respond, client, channel_id: str, user_id: str, args: lis
                 api_version=settings.openai_api_version,
                 azure_deployment=settings.azure_deployment,
             )
-            
+
             result = analyzer.analyze_namespace(
                 namespace=namespace,
                 core_v1=core_v1,
                 apps_v1=apps_v1,
             )
-            
+
             # Convert dict result to Analysis-like object
             from .models import Analysis
-            
+
             # Extract AI analysis text or create summary from data
             ai_text = result.get("analysis", "")
             summary_data = result.get("summary", {})
-            
+
             # Create a text summary
             if isinstance(summary_data, dict):
                 summary_parts = [
@@ -274,7 +276,7 @@ def handle_investigate(respond, client, channel_id: str, user_id: str, args: lis
                 summary_text = "\n".join(summary_parts)
             else:
                 summary_text = str(summary_data)
-            
+
             # Parse AI analysis if it's a structured response
             if isinstance(ai_text, dict):
                 likely_cause = ai_text.get("root_cause", "Analysis completed")
@@ -289,20 +291,20 @@ def handle_investigate(respond, client, channel_id: str, user_id: str, args: lis
                 likely_cause = "No issues detected" if not summary_data.get('has_issues') else "Issues detected"
                 recommended_steps = ["Review namespace status"]
                 severity = "low" if not summary_data.get('has_issues') else "medium"
-            
+
             analysis = Analysis(
                 summary=summary_text,
                 likely_cause=likely_cause,
                 recommended_steps=recommended_steps,
                 severity=severity,
             )
-        
+
         # Post results - open DM with user and send there
         try:
             # Try to use the channel if it's valid, otherwise DM the user
             dm_response = client.conversations_open(users=[user_id])
             dm_channel = dm_response["channel"]["id"]
-            
+
             client.chat_postMessage(
                 channel=dm_channel,
                 blocks=build_investigation_result_response(
@@ -322,7 +324,7 @@ def handle_investigate(respond, client, channel_id: str, user_id: str, args: lis
                     analysis=analysis,
                 )
             )
-        
+
     except Exception as e:
         logger.exception(f"Error in handle_investigate: {e}")
         try:
@@ -332,7 +334,7 @@ def handle_investigate(respond, client, channel_id: str, user_id: str, args: lis
                 channel=dm_channel,
                 blocks=build_error_response(f"Investigation failed: {str(e)}")
             )
-        except:
+        except Exception:
             # Last resort - use respond
             respond(blocks=build_error_response(f"Investigation failed: {str(e)}"))
 
@@ -341,14 +343,14 @@ def handle_recent(respond) -> None:
     """Handle /fyr recent command - show recent failures."""
     try:
         engine = init_db(settings.database_url)
-        repo = RolloutRepo(engine)
-        
+        repo = RolloutRepo(engine, annotation_prefix=settings.annotation_prefix)
+
         failures = repo.list_by_status("failed", limit=10, exclude_system=True)
-        
+
         if not failures:
             respond(text="✨ No recent failures in the last 24 hours!")
             return
-        
+
         blocks = [
             {
                 "type": "header",
@@ -360,16 +362,16 @@ def handle_recent(respond) -> None:
             },
             {"type": "divider"}
         ]
-        
+
         for f in failures:
             time_ago = _format_time_ago(f.started_at) if f.started_at else "unknown"
-            
+
             cause = "Unknown"
             if f.analysis_id:
                 analysis_record = repo.get_analysis(f.analysis_id)
                 if analysis_record and analysis_record.analysis:
                     cause = analysis_record.analysis.get("likely_cause", "Unknown")[:80]
-            
+
             blocks.append({
                 "type": "section",
                 "text": {
@@ -388,9 +390,9 @@ def handle_recent(respond) -> None:
                     "value": str(f.id),
                 }
             })
-        
+
         respond(blocks=blocks)
-        
+
     except Exception as e:
         logger.exception(f"Error in handle_recent: {e}")
         respond(blocks=build_error_response(f"Failed to get recent failures: {str(e)}"))
@@ -400,13 +402,13 @@ def _format_time_ago(dt: datetime) -> str:
     """Format datetime as relative time string."""
     if not dt:
         return "unknown"
-    
-    now = datetime.utcnow()
+
+    now = utcnow()
     if dt.tzinfo:
         dt = dt.replace(tzinfo=None)
-    
+
     delta = now - dt
-    
+
     if delta.days > 0:
         return f"{delta.days}d ago"
     elif delta.seconds >= 3600:
@@ -422,7 +424,7 @@ def _format_time_ago(dt: datetime) -> str:
 def _parse_resource_value(value: str) -> float:
     """Parse Kubernetes resource value to number."""
     value = str(value).strip()
-    
+
     multipliers = {
         'Ki': 1024,
         'Mi': 1024**2,
@@ -433,13 +435,13 @@ def _parse_resource_value(value: str) -> float:
         'G': 1000**3,
         'T': 1000**4,
     }
-    
+
     for suffix, mult in multipliers.items():
         if value.endswith(suffix):
             return float(value[:-len(suffix)]) * mult
-    
+
     # Handle millicores (e.g., "500m" for CPU)
     if value.endswith('m'):
         return float(value[:-1]) / 1000
-    
+
     return float(value)

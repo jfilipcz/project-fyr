@@ -101,7 +101,7 @@ test.describe('Slack Interactive Features', () => {
     // Simulate user asking a question in thread
     await request.post(`${slackMockUrl}/messages`, {
       data: {
-        channel: 'C0A451TPJMD',
+        channel: 'C0XXXXXXXXXXX',
         thread_ts: '1234567890.123456',
         text: 'Why did this fail?',
         user: 'U05UFAG2WPR',

@@ -73,10 +73,10 @@
                 <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Team</p>
                 <p class="mt-1 text-sm text-gray-900">{{ rollout.team or 'N/A' }}</p>
             </div>
-            {% if rollout.metadata_json and (rollout.metadata_json.get('example.com/requestor-email') or rollout.metadata_json.get('requestor')) %}
+            {% if rollout.metadata_json and (rollout.metadata_json.get(annotation_prefix + '/requestor-email') or rollout.metadata_json.get('requestor')) %}
             <div class="px-5 py-4">
                 <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Requestor</p>
-                <p class="mt-1 text-sm text-gray-900">{{ rollout.metadata_json.get('example.com/requestor-email') or rollout.metadata_json.get('requestor') }}</p>
+                <p class="mt-1 text-sm text-gray-900">{{ rollout.metadata_json.get(annotation_prefix + '/requestor-email') or rollout.metadata_json.get('requestor') }}</p>
             </div>
             {% endif %}
         </div>

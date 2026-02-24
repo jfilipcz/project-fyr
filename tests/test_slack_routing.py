@@ -1,4 +1,3 @@
-import pytest
 
 from project_fyr.slack import build_routing_plan
 

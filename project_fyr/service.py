@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Runtime orchestration for Project Fyr."""
 
 from __future__ import annotations
@@ -5,10 +7,11 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
 from dataclasses import dataclass
-import logging
+from datetime import datetime, timedelta
 from typing import Any
+
+from project_fyr import utcnow
 
 from kubernetes import client, config, watch
 from kubernetes.client.rest import ApiException
@@ -17,7 +20,7 @@ from kubernetes.config.config_exception import ConfigException
 from .agent import InvestigatorAgent
 from .config import Settings, settings
 from .db import RolloutRepo, AlertRepo, init_db
-from .models import NotifyStatus, ReducedContext, RolloutStatus, Alert
+from .models import NotifyStatus, ReducedContext, RolloutStatus
 from .slack import SlackNotifier
 from .triage import triage_failure
 
@@ -34,9 +37,9 @@ class AlertBatcher:
 
     def run_once(self):
         # Look back window
-        now = datetime.utcnow()
+        now = utcnow()
         window_start = now - timedelta(seconds=self._window)
-        
+
         alerts = self._repo.get_unbatched_alerts(window_start)
         if not alerts:
             return
@@ -44,12 +47,12 @@ class AlertBatcher:
         # Simple grouping: by namespace + service (if label exists)
         # Fallback: by alertname
         groups: dict[str, list] = {}
-        
+
         for alert in alerts:
             # Check if alert is old enough to be batched (wait for window to close slightly?)
             # For simplicity, we batch everything that is in the window.
             # Real implementation might wait until alert.received_at < now - window/2
-            
+
             ns = alert.labels.get("namespace", "default")
             svc = alert.labels.get("service") or alert.labels.get("app") or "unknown"
             key = f"{ns}/{svc}"
@@ -60,13 +63,13 @@ class AlertBatcher:
         for key, group in groups.items():
             if len(group) < self._min_count:
                 continue
-                
+
             ns, svc = key.split("/", 1)
-            
+
             # Summary
             alert_names = list(set(a.labels.get("alertname", "unknown") for a in group))
             summary = f"Batch of {len(group)} alerts for {key}. Alerts: {', '.join(alert_names)}"
-            
+
             logger.info(f"Creating batch for {key} with {len(group)} alerts")
             self._repo.create_batch(
                 alerts=group,
@@ -134,7 +137,7 @@ class AnalysisWorker:
         namespace_channel: str | None = None,
     ) -> dict[str, Any]:
         annotations = self._get_namespace_annotations(namespace)
-        # Support both annotation styles: example.com/requestor-email and requestor (ephenv)
+        # Support both annotation styles: <prefix>/requestor-email and requestor (ephenv)
         requestor_email = annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_EPHENV)
         resolved_namespace_channel = namespace_channel or annotations.get(ANNOTATION_SLACK_CHANNEL)
 
@@ -155,7 +158,7 @@ class AnalysisWorker:
     def _is_deployment_healthy_now(self, deployment: str, namespace: str) -> bool:
         """
         Quick pre-check: Is the deployment actually healthy RIGHT NOW?
-        
+
         This catches false positives BEFORE expensive LLM investigation.
         Returns True if deployment is healthy (should skip investigation).
         Returns False if deployment has issues (should investigate).
@@ -169,7 +172,7 @@ class AnalysisWorker:
                     logger.info(f"Pre-check: namespace_missing {namespace} (404) - skipping")
                     return True  # Namespace deleted, skip investigation
                 raise
-            
+
             # Check if deployment still exists
             try:
                 dep = self._apps_v1.read_namespaced_deployment(deployment, namespace)
@@ -178,10 +181,10 @@ class AnalysisWorker:
                     logger.info(f"Pre-check: deployment_missing {namespace}/{deployment} (404) - skipping")
                     return True  # Deployment deleted, skip investigation
                 raise
-            
+
             # Check deployment health using existing evaluate_deployment_phase logic
             phase = evaluate_deployment_phase(dep)
-            
+
             desired = getattr(dep.spec, "replicas", 0) or 0
             if desired == 0:
                 logger.info(
@@ -196,23 +199,23 @@ class AnalysisWorker:
                     f"available={available} desired={desired}"
                 )
                 return True
-            
+
             # Also check pod health - maybe rollout succeeded
             selector = dep.spec.selector.match_labels or {}
             label_selector = ",".join(f"{k}={v}" for k, v in selector.items())
             pods = self._core_v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
-            
+
             if not pods.items:
                 # No pods at all - likely namespace being torn down
                 logger.info(
                     f"Pre-check: healthy_no_pods {namespace}/{deployment} selector={label_selector} - likely teardown"
                 )
                 return True
-            
+
             # Count healthy vs unhealthy pods
             running_ready = 0
             total_pods = len(pods.items)
-            
+
             for pod in pods.items:
                 if pod.status.phase == "Running":
                     # Check if all containers are ready
@@ -220,7 +223,7 @@ class AnalysisWorker:
                         all_ready = all(cs.ready for cs in pod.status.container_statuses)
                         if all_ready:
                             running_ready += 1
-            
+
             # If all pods are running and ready, deployment is healthy
             if running_ready == total_pods and total_pods > 0:
                 logger.info(
@@ -228,7 +231,7 @@ class AnalysisWorker:
                     f"ready={running_ready} total={total_pods} selector={label_selector}"
                 )
                 return True
-            
+
             # Check for active failure signals
             signals = analyze_pod_failures(pods.items)
             if signals.total_failing == 0 and phase not in ("FAILED_PROGRESS", "PENDING"):
@@ -239,14 +242,14 @@ class AnalysisWorker:
                 )
                 # Don't mark as healthy yet - let investigation proceed to confirm
                 return False
-            
+
             # Has failure signals - should investigate
             logger.debug(
                 f"Pre-check: {namespace}/{deployment} has issues - "
                 f"phase={phase}, failing_pods={signals.total_failing}/{signals.total_pods}"
             )
             return False
-            
+
         except Exception as e:
             logger.warning(f"Pre-check error for {namespace}/{deployment}: {e} - proceeding with investigation")
             return False  # On error, proceed with investigation to be safe
@@ -255,13 +258,13 @@ class AnalysisWorker:
         while True:
             # 1. Process Rollouts (Legacy/Existing path)
             self._process_rollouts()
-            
+
             # 2. Process Alert Jobs
             self._process_alert_jobs()
-            
+
             # 3. Process Namespace Investigation Jobs
             self._process_namespace_jobs()
-            
+
             time.sleep(15)
 
     def _process_rollouts(self):
@@ -281,14 +284,14 @@ class AnalysisWorker:
                             reason="Namespace deleted (ephemeral CI environment)",
                         )
                         continue
-                
+
                 # Pre-check is still useful for logging, but failed rollouts must be analyzed.
                 if self._is_deployment_healthy_now(rollout.deployment, rollout.namespace):
                     logger.info(
                         f"Pre-check: {rollout.namespace}/{rollout.deployment} appears healthy, "
                         "but rollout is FAILED - proceeding with investigation"
                     )
-                
+
                 logger.info(f"Starting investigation for rollout {rollout.namespace}/{rollout.deployment}")
                 self._investigate_rollout(rollout)
             except Exception as exc:
@@ -299,14 +302,14 @@ class AnalysisWorker:
         trigger_context = None
         if rollout.metadata_json:
             trigger_context = rollout.metadata_json.get("trigger_context")
-        
+
         # Agentic investigation with trigger context
         analysis = self._agent.investigate(
-            rollout.deployment, 
+            rollout.deployment,
             rollout.namespace,
             trigger_context=trigger_context,
         )
-        
+
         # Create a dummy ReducedContext for DB compatibility
         reduced = ReducedContext(
             namespace=rollout.namespace,
@@ -323,7 +326,7 @@ class AnalysisWorker:
         triage = triage_failure(reduced, analysis)
         analysis.triage_team = triage.team
         analysis.triage_reason = triage.reason
-        
+
         metadata = rollout_metadata_dict(rollout)
         metadata.update(
             {
@@ -342,10 +345,10 @@ class AnalysisWorker:
                 namespace_channel=rollout.slack_channel,
             )
         )
-        
+
         channel = rollout.slack_channel
         rollout_ref = f"{rollout.namespace}/{rollout.deployment}#{rollout.generation}"
-        
+
         sent = self._slack.send_analysis(
             channel=channel,
             rollout_ref=rollout_ref,
@@ -353,11 +356,11 @@ class AnalysisWorker:
             metadata=metadata,
             rollout_id=rollout.id,
         )
-        
+
         self._repo.update_notify_status(
             rollout.id, NotifyStatus.SENT if sent else NotifyStatus.FAILED
         )
-        
+
         self._repo.append_analysis(
             rollout.id,
             reduced_context=reduced,
@@ -376,8 +379,8 @@ class AnalysisWorker:
                 self._alert_repo.update_job_status(job.id, "failed")
 
     def _investigate_alert_batch(self, job):
-        self._alert_repo.update_job_status(job.id, "running", started_at=datetime.utcnow())
-        
+        self._alert_repo.update_job_status(job.id, "running", started_at=utcnow())
+
         batch = self._alert_repo.get_batch(job.alert_batch_id)
         if not batch:
             logger.error(f"Batch {job.alert_batch_id} not found")
@@ -385,7 +388,7 @@ class AnalysisWorker:
             return
 
         alerts = self._alert_repo.get_batch_alerts(batch.id)
-        
+
         # Prepare context
         alert_context = {
             "summary": batch.context_summary,
@@ -400,14 +403,14 @@ class AnalysisWorker:
                 for a in alerts
             ]
         }
-        
+
         # Deployment/Namespace might be inferred
         deployment = batch.service or "unknown"
         namespace = batch.namespace or "default"
-        
+
         # Agent investigation
         analysis = self._agent.investigate(deployment, namespace, alert_context=alert_context)
-        
+
         # Notify Slack with alert-specific blocks
         alerts_payload = [
             {
@@ -433,9 +436,9 @@ class AnalysisWorker:
             primary_alert_name=batch.primary_fingerprint,
             metadata=routing_metadata,
         )
-        
-        self._alert_repo.update_job_status(job.id, "done", completed_at=datetime.utcnow())
-    
+
+        self._alert_repo.update_job_status(job.id, "done", completed_at=utcnow())
+
     def _process_namespace_jobs(self):
         """Process pending namespace investigation jobs."""
         jobs = self._alert_repo.get_pending_namespace_jobs()
@@ -446,26 +449,26 @@ class AnalysisWorker:
             except Exception as exc:
                 logger.error(f"namespace job error: {exc}")
                 self._alert_repo.update_job_status(job.id, "failed")
-    
+
     def _investigate_namespace_incident(self, job):
         """Investigate a namespace incident using the agent."""
         from .db import NamespaceIncidentRepo
-        
-        self._alert_repo.update_job_status(job.id, "running", started_at=datetime.utcnow())
-        
+
+        self._alert_repo.update_job_status(job.id, "running", started_at=utcnow())
+
         # Get the namespace incident
         incident_repo = NamespaceIncidentRepo(self._repo._engine)
         incident = incident_repo.get_by_id(job.namespace_incident_id)
-        
+
         if not incident:
             logger.error(f"Namespace incident {job.namespace_incident_id} not found")
             self._alert_repo.update_job_status(job.id, "failed")
             return
-        
+
         # Update incident status to INVESTIGATING
         from .models import NamespaceIncidentStatus
         incident_repo.update_status(incident.id, NamespaceIncidentStatus.INVESTIGATING)
-        
+
         # Run agent investigation
         analysis = self._agent.investigate_namespace(
             namespace=incident.namespace,
@@ -474,24 +477,24 @@ class AnalysisWorker:
             started_at=str(incident.started_at),
             metadata=incident.metadata or {}
         )
-        
-        # Build context dict for storage
-        from .models import NamespaceContext
-        context = NamespaceContext(
-            namespace=incident.namespace,
-            cluster=incident.cluster,
-            incident_type=incident.incident_type,
-            metadata=incident.metadata or {}
-        )
-        
+
+        # Build a reduced context dict for storage (NamespaceContext requires
+        # fields we don't have here; store the serialisable metadata instead)
+        reduced_context = {
+            "namespace": incident.namespace,
+            "cluster": incident.cluster,
+            "incident_type": incident.incident_type,
+            "metadata": incident.metadata or {},
+        }
+
         # Store analysis in incident
         incident_repo.append_analysis(
             incident.id,
-            context=context,
+            reduced_context=reduced_context,
             analysis=analysis,
             model_name=self._config.langchain_model_name
         )
-        
+
         # Send Slack notification
         ref = f"Namespace {incident.namespace} - {incident.incident_type}"
         metadata = {
@@ -508,7 +511,7 @@ class AnalysisWorker:
                 namespace_channel=incident.slack_channel,
             )
         )
-        
+
         channel = incident.slack_channel
         sent = self._slack.send_analysis(
             channel=channel,
@@ -516,19 +519,19 @@ class AnalysisWorker:
             analysis=analysis,
             metadata=metadata
         )
-        
+
         # Update incident notify status
         from .models import NotifyStatus
         incident_repo.update_notify_status(
-            incident.id, 
+            incident.id,
             NotifyStatus.SENT if sent else NotifyStatus.FAILED
         )
-        
+
         # Mark job as completed
         self._alert_repo.update_job_status(
             job.id,
             "completed",
-            completed_at=datetime.utcnow(),
+            completed_at=utcnow(),
             analysis_summary=analysis.summary
         )
 
@@ -537,7 +540,7 @@ class WatcherService:
     def __init__(self, config: Settings | None = None):
         self._config = config or settings
         self._engine = init_db(self._config.database_url)
-        self._repo = RolloutRepo(self._engine)
+        self._repo = RolloutRepo(self._engine, annotation_prefix=self._config.annotation_prefix)
 
     def start(self):
         try:
@@ -562,7 +565,7 @@ class WatcherService:
             name="project-fyr-reconcile",
         )
         threads.extend([watch_thread, reconcile_thread])
-        
+
         # Add namespace monitoring thread if enabled
         if self._config.namespace_monitoring_enabled:
             namespace_monitor_thread = threading.Thread(
@@ -573,7 +576,7 @@ class WatcherService:
             )
             threads.append(namespace_monitor_thread)
             logger.info("Namespace monitoring enabled")
-        
+
         for t in threads:
             t.start()
 
@@ -585,10 +588,10 @@ class WatcherService:
         core_v1 = client.CoreV1Api()
         namespace_cache = NamespaceMetadataCache(core_v1)
         w = watch.Watch()
-        
+
         # If watch_all_namespaces is True, don't filter by label
-        selector = None if self._config.watch_all_namespaces else "project-fyr/enabled=true"
-        
+        selector = None if self._config.watch_all_namespaces else f"{self._config.annotation_prefix}/enabled=true"
+
         while True:
             try:
                 stream = w.stream(
@@ -601,7 +604,7 @@ class WatcherService:
                     etype = event["type"]
                     ns_meta = namespace_cache.get(dep.metadata.namespace)
                     handle_deployment_event(
-                        dep, etype, self._repo, cluster, 
+                        dep, etype, self._repo, cluster,
                         namespace_metadata=ns_meta,
                         config=self._config
                     )
@@ -614,7 +617,7 @@ class WatcherService:
         timeout = timedelta(seconds=self._config.rollout_timeout_seconds)
         core_v1 = client.CoreV1Api()
         while True:
-            now = datetime.utcnow()
+            now = utcnow()
             rollouts = self._repo.list_active(cluster)
             for rollout in rollouts:
                 try:
@@ -627,96 +630,95 @@ class WatcherService:
     def _namespace_monitor_loop(self, cluster: str):
         """Periodically check for namespace-level issues."""
         from .db import NamespaceIncidentRepo
-        from .models import NamespaceIncidentType
-        
+
         core_v1 = client.CoreV1Api()
         incident_repo = NamespaceIncidentRepo(self._engine)
-        
+
         logger.info(f"Starting namespace monitor loop (interval: {self._config.namespace_monitoring_interval_seconds}s)")
-        
+
         while True:
             try:
                 # Get all namespaces
                 namespaces = core_v1.list_namespace()
                 logger.info(f"Checking {len(namespaces.items)} namespaces for issues")
-                
+
                 for ns in namespaces.items:
                     ns_name = ns.metadata.name
-                    
+
                     # Check if namespace has project-fyr/enabled annotation
                     annotations = ns.metadata.annotations or {}
-                    if not annotations.get("project-fyr/enabled") == "true":
+                    if not annotations.get(ANNOTATION_ENABLED) == "true":
                         continue
-                    
+
                     logger.info(f"Monitoring namespace {ns_name} (phase: {ns.status.phase if ns.status else 'Unknown'})")
-                    
+
                     # Extract team/channel info
-                    team = annotations.get("project-fyr/team")
-                    slack_channel = annotations.get("project-fyr/slack-channel")
-                    
+                    team = annotations.get(ANNOTATION_TEAM)
+                    slack_channel = annotations.get(ANNOTATION_SLACK_CHANNEL)
+
                     # Check for stuck terminating
                     if ns.status and ns.status.phase == "Terminating":
                         self._check_terminating_stuck(
                             cluster, ns_name, ns, incident_repo, team, slack_channel
                         )
-                    
+
                     # Check for quota violations, evictions, restarts
                     # (will implement in next iteration)
-                    
+
             except Exception as exc:
                 logger.error(f"namespace monitor error: {exc}")
-            
+
             time.sleep(self._config.namespace_monitoring_interval_seconds)
-    
+
     def _check_terminating_stuck(
         self, cluster: str, ns_name: str, ns, incident_repo, team, slack_channel
     ):
         """Check if namespace is stuck in Terminating state."""
         from .models import NamespaceIncidentType, NamespaceIncidentStatus
-        
+
         # Check if there's already an active incident
         existing = incident_repo.get_active_incident(
             cluster, ns_name, NamespaceIncidentType.TERMINATING_STUCK.value
         )
-        
+
         if existing:
             # Already tracking this
             return
-        
+
         # Check how long it's been terminating
         deletion_timestamp = ns.metadata.deletion_timestamp
         if not deletion_timestamp:
             return
-        
-        now = datetime.utcnow()
+
+        now = utcnow()
         # Handle timezone-aware datetime from k8s
         if deletion_timestamp.tzinfo:
             deletion_timestamp = deletion_timestamp.replace(tzinfo=None)
-        
+
         stuck_duration = now - deletion_timestamp
         threshold = timedelta(minutes=self._config.namespace_terminating_threshold_minutes)
-        
+
         if stuck_duration < threshold:
             return
-        
+
         # Check rate limits
         if not self._check_rate_limits(cluster, ns_name, incident_repo):
             logger.warning(
                 f"Rate limit exceeded for namespace {ns_name}, skipping investigation"
             )
             return
-        
+
         # Create incident
         logger.info(
             f"Namespace {ns_name} stuck in Terminating for {stuck_duration}, creating incident"
         )
-        
+
         metadata = {
             "deletion_timestamp": deletion_timestamp.isoformat(),
             "stuck_duration_seconds": int(stuck_duration.total_seconds()),
             "finalizers": ns.metadata.finalizers or [],
         }
-        
+
         incident = incident_repo.create(
             cluster=cluster,
             namespace=ns_name,
@@ -727,38 +729,38 @@ class WatcherService:
             team=team,
             slack_channel=slack_channel,
         )
-        
+
         logger.info(f"Created namespace incident {incident.id} for {ns_name}")
-        
+
         # Create investigation job
         self._create_investigation_job(incident.id, "namespace")
-    
+
     def _create_investigation_job(self, resource_id: int, job_type: str):
         """Create an investigation job for a rollout or namespace incident."""
         from .db import AlertRepo
-        
+
         # Reuse AlertRepo for job creation (it has the job methods)
         alert_repo = AlertRepo(self._engine)
-        
+
         with alert_repo.session() as s:
             from .db import InvestigationJob
-            
+
             job_data = {
                 "type": job_type,
                 "status": "pending",
             }
-            
+
             if job_type == "namespace":
                 job_data["namespace_incident_id"] = resource_id
             elif job_type == "rollout":
                 job_data["rollout_id"] = resource_id
-            
+
             job = InvestigationJob(**job_data)
             s.add(job)
             s.commit()
             s.refresh(job)
             logger.info(f"Created investigation job {job.id} for {job_type} {resource_id}")
-    
+
     def _check_rate_limits(self, cluster: str, namespace: str, incident_repo) -> bool:
         """Check if we're within rate limits for investigations."""
         # Check namespace limit
@@ -768,7 +770,7 @@ class WatcherService:
         logger.info(f"Rate limit check for {namespace}: {namespace_count} investigations in last hour (limit: {self._config.max_investigations_per_namespace_per_hour})")
         if namespace_count >= self._config.max_investigations_per_namespace_per_hour:
             return False
-        
+
         # Check cluster limit
         cluster_count = incident_repo.count_investigations_in_window(
             cluster, hours=1
@@ -776,7 +778,7 @@ class WatcherService:
         logger.info(f"Rate limit check for cluster: {cluster_count} investigations in last hour (limit: {self._config.max_investigations_per_cluster_per_hour})")
         if cluster_count >= self._config.max_investigations_per_cluster_per_hour:
             return False
-        
+
         return True
 
 
@@ -790,7 +792,7 @@ class AnalyzerService:
     def __init__(self, config: Settings | None = None):
         self._config = config or settings
         self._engine = init_db(self._config.database_url)
-        self._repo = RolloutRepo(self._engine)
+        self._repo = RolloutRepo(self._engine, annotation_prefix=self._config.annotation_prefix)
         self._alert_repo = AlertRepo(self._engine)
         self._batcher = AlertBatcher(self._alert_repo, self._config)
 
@@ -804,7 +806,7 @@ class AnalyzerService:
 
         # Start Prometheus metrics server in a background thread
         self._start_metrics_server()
-        
+
         # Start Batcher thread
         batcher_thread = threading.Thread(
             target=self._batcher_loop,
@@ -815,7 +817,7 @@ class AnalyzerService:
 
         worker = AnalysisWorker(self._repo, self._alert_repo, self._config.k8s_cluster_name, self._config)
         worker.loop()
-    
+
     def _batcher_loop(self):
         while True:
             try:
@@ -823,7 +825,7 @@ class AnalyzerService:
             except Exception as e:
                 logger.error(f"Batcher error: {e}")
             time.sleep(10)
-    
+
     def _start_metrics_server(self):
         """Start Prometheus metrics HTTP server on port 8000."""
         from prometheus_client import start_http_server
@@ -863,50 +865,50 @@ def list_deployment_pods(core_v1: client.CoreV1Api, dep) -> list:
 class PodFailureSignals:
     """Signals indicating pod failures, separated by permanence."""
     total_pods: int = 0
-    
+
     # Image issues (may be transient or permanent)
     image_pull_pods: int = 0  # ImagePullBackOff, ErrImagePull, InvalidImageName
-    
+
     # Container configuration issues (permanent)
     config_error_pods: int = 0  # CreateContainerConfigError (missing Secret/ConfigMap)
     container_error_pods: int = 0  # CreateContainerError, RunContainerError
-    
+
     # Runtime failures (usually permanent after multiple restarts)
     crashloop_pods: int = 0  # CrashLoopBackOff
-    
+
     # Scheduling issues (usually permanent)
     unschedulable_pods: int = 0  # PodScheduled=False with Unschedulable reason
-    
+
     # Track transient vs permanent for smarter alerting
     transient_failure_pods: int = 0  # ErrImagePull, ImagePullBackOff (may self-heal)
     permanent_failure_pods: int = 0  # InvalidImageName, CreateContainerConfigError, etc.
-    
+
     # Track specific transient patterns
     qps_exceeded_pods: int = 0  # Specifically "pull QPS exceeded" - very likely transient
-    
+
     # Collected failure reasons for logging/analysis
     failure_reasons: list = None
-    
+
     def __post_init__(self):
         if self.failure_reasons is None:
             self.failure_reasons = []
-    
+
     @property
     def total_failing(self) -> int:
         """Total pods with any failure conditions."""
         return (
-            self.image_pull_pods + 
-            self.config_error_pods + 
-            self.container_error_pods + 
-            self.crashloop_pods + 
+            self.image_pull_pods +
+            self.config_error_pods +
+            self.container_error_pods +
+            self.crashloop_pods +
             self.unschedulable_pods
         )
-    
+
     @property
     def has_only_transient_failures(self) -> bool:
         """Check if all failures are transient (may self-heal)."""
         return self.transient_failure_pods > 0 and self.permanent_failure_pods == 0
-    
+
     @property
     def is_likely_qps_issue(self) -> bool:
         """Check if this looks like a registry rate limit issue."""
@@ -926,15 +928,15 @@ PERMANENT_FAILURE_REASONS = {
     # Image issues that won't self-heal
     "InvalidImageName",  # Typo in image name - won't fix itself
     "RegistryUnavailable",  # Registry is down or unreachable
-    
+
     # Container configuration (missing Secret/ConfigMap, bad volume mounts)
     "CreateContainerConfigError",
     "CreateContainerError",
     "RunContainerError",
-    
+
     # Runtime crashes
     "CrashLoopBackOff",
-    
+
     # Init container failures
     "InitContainerCrashLoopBackOff",
 }
@@ -946,24 +948,24 @@ ALL_FAILURE_REASONS = TRANSIENT_FAILURE_REASONS | PERMANENT_FAILURE_REASONS
 def analyze_pod_failures(pods: list) -> PodFailureSignals:
     """Analyze pods for failure conditions, distinguishing transient from permanent."""
     signals = PodFailureSignals(total_pods=len(pods))
-    
+
     for pod in pods:
         pod_name = pod.metadata.name if pod.metadata else "unknown"
-        
+
         # Check container statuses (including init containers)
         all_container_statuses = list(pod.status.container_statuses or [])
         all_container_statuses.extend(pod.status.init_container_statuses or [])
-        
+
         for cs in all_container_statuses:
             waiting = cs.state.waiting if cs.state else None
             if not waiting:
                 continue
             reason = waiting.reason or ""
             message = waiting.message or ""
-            
+
             if reason in ALL_FAILURE_REASONS:
                 signals.failure_reasons.append(f"{pod_name}: {reason} - {message[:100]}")
-            
+
             # Track transient vs permanent
             if reason in TRANSIENT_FAILURE_REASONS:
                 signals.transient_failure_pods += 1
@@ -972,7 +974,7 @@ def analyze_pod_failures(pods: list) -> PodFailureSignals:
                     signals.qps_exceeded_pods += 1
             elif reason in PERMANENT_FAILURE_REASONS:
                 signals.permanent_failure_pods += 1
-            
+
             # Categorize by failure type (for backwards compatibility)
             if reason in ("ImagePullBackOff", "ErrImagePull", "InvalidImageName", "RegistryUnavailable"):
                 signals.image_pull_pods += 1
@@ -982,7 +984,7 @@ def analyze_pod_failures(pods: list) -> PodFailureSignals:
                 signals.container_error_pods += 1
             elif reason in ("CrashLoopBackOff", "InitContainerCrashLoopBackOff"):
                 signals.crashloop_pods += 1
-        
+
         # Check pod conditions for scheduling failures
         for condition in pod.status.conditions or []:
             if condition.type == "PodScheduled" and condition.status == "False":
@@ -993,41 +995,41 @@ def analyze_pod_failures(pods: list) -> PodFailureSignals:
                     signals.unschedulable_pods += 1
                     signals.permanent_failure_pods += 1  # Unschedulable is permanent
                     signals.failure_reasons.append(f"{pod_name}: Unschedulable - {message[:100]}")
-    
+
     return signals
 
 
 def should_fail_early(signals: PodFailureSignals, min_pods: int = 1) -> bool:
     """
     Determine if we should mark rollout as failed immediately.
-    
+
     Only triggers early failure for PERMANENT failures. Transient failures
     (like QPS rate limits) should be given time to self-heal.
     """
     if signals.total_pods < min_pods:
         return False
-    
+
     # If we only have transient failures (QPS exceeded, first image pull attempts),
     # do NOT fail early - these often self-heal
     if signals.has_only_transient_failures:
         return False
-    
+
     # If this looks like a pure QPS/rate limit issue, don't fail early
     if signals.is_likely_qps_issue:
         return False
-    
+
     # For permanent failures, fail if at least 1 pod (or half of total pods) is affected
     threshold = max(1, signals.total_pods // 2)
     if signals.permanent_failure_pods >= threshold:
         return True
-    
+
     # Also fail for crashloop (after some restarts) and config errors
     if signals.config_error_pods > 0 or signals.container_error_pods > 0:
         return True
-    
+
     if signals.crashloop_pods > 0:
         return True
-    
+
     return False
 
 
@@ -1040,19 +1042,24 @@ def rollout_metadata_dict(rollout) -> dict[str, Any]:
     return metadata
 
 
-ANNOTATION_SLACK_CHANNEL = "project-fyr/slack-channel"
-ANNOTATION_TEAM = "project-fyr/team"
-ANNOTATION_PREFIX = "project-fyr/"
-ANNOTATION_REQUESTOR_EMAIL = "example.com/requestor-email"
+# Annotation keys derived from configurable prefix
+_prefix = settings.annotation_prefix
+ANNOTATION_SLACK_CHANNEL = f"{_prefix}/slack-channel"
+ANNOTATION_TEAM = f"{_prefix}/team"
+ANNOTATION_PREFIX = f"{_prefix}/"
+ANNOTATION_REQUESTOR_EMAIL = f"{_prefix}/requestor-email"
 ANNOTATION_REQUESTOR_EMAIL_EPHENV = "requestor"  # Ephenv operator style
-LABEL_OWNER_CHANNEL = "example.com/owner-channel"
+ANNOTATION_ENABLED = f"{_prefix}/enabled"
+LABEL_OWNER_CHANNEL = f"{_prefix}/owner-channel"
 
 
 def parse_namespace_annotations(annotations: dict[str, str] | None) -> dict[str, Any]:
     annotations = annotations or {}
     namespace_specific = {k: v for k, v in annotations.items() if k.startswith(ANNOTATION_PREFIX)}
-    # Support both annotation styles: example.com/requestor-email and requestor (ephenv)
-    requestor_email = annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_EPHENV)
+    # Support both annotation styles: <prefix>/requestor-email and requestor (ephenv)
+    requestor_email = (
+        annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_EPHENV) or ""
+    ).strip()
     if requestor_email:
         namespace_specific[ANNOTATION_REQUESTOR_EMAIL] = requestor_email
     metadata: dict[str, Any] = {}
@@ -1122,29 +1129,29 @@ def handle_deployment_event(
         return
 
     cfg = config or settings
-    
+
     # Skip system namespaces
     if dep.metadata.namespace in cfg.system_namespaces:
         logger.debug(f"Skipping system namespace: {dep.metadata.namespace}")
         return
-    
+
     labels = dep.metadata.labels or {}
     ns_meta = namespace_metadata or {}
     merged_metadata_json = merge_rollout_metadata(ns_meta, labels)
-    
+
     # When watch_all_namespaces=False, check if this deployment should be watched
     # The watch selector filters by deployment label, but we also support namespace-level
     # annotations. So we need this additional check for namespace-level opt-in.
     if not cfg.watch_all_namespaces:
         # Deployment has the label
-        deployment_enabled = labels.get("project-fyr/enabled") == "true"
-        
+        deployment_enabled = labels.get(ANNOTATION_ENABLED) == "true"
+
         # Namespace has the annotation (if namespace_label_enabled is True)
         namespace_enabled = (
-            cfg.namespace_label_enabled and 
-            ns_meta.get("metadata_json", {}).get("project-fyr/enabled") == "true"
+            cfg.namespace_label_enabled and
+            ns_meta.get("metadata_json", {}).get(ANNOTATION_ENABLED) == "true"
         )
-        
+
         if not (deployment_enabled or namespace_enabled):
             return
 
@@ -1155,7 +1162,7 @@ def handle_deployment_event(
 
     rollout = repo.get_by_key(cluster, ns, name, generation)
     phase = evaluate_deployment_phase(dep)
-    now = datetime.utcnow()
+    now = utcnow()
 
     if rollout is None:
         status = RolloutStatus.PENDING if phase == "PENDING" else RolloutStatus.ROLLING_OUT
@@ -1211,7 +1218,7 @@ def reconcile_rollout(
                 if signals.failure_reasons:
                     for reason in signals.failure_reasons[:5]:  # Log first 5 reasons
                         logger.info(f"  - {reason}")
-                
+
                 # Store trigger context for investigation enrichment
                 failure_type = "permanent"
                 if signals.crashloop_pods > 0:
@@ -1220,7 +1227,7 @@ def reconcile_rollout(
                     failure_type = "config_error"
                 elif signals.unschedulable_pods > 0:
                     failure_type = "unschedulable"
-                
+
                 time_to_failure = int(age.total_seconds()) if age else None
                 repo.append_trigger_context(
                     rollout.id,
@@ -1230,7 +1237,7 @@ def reconcile_rollout(
                     time_to_failure_seconds=time_to_failure,
                     failure_type=failure_type,
                 )
-                
+
                 repo.update_status(rollout.id, RolloutStatus.FAILED, failed_at=now)
                 # Queue for immediate analysis
                 repo.queue_for_analysis(rollout.id)

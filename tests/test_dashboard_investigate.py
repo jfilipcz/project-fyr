@@ -9,10 +9,10 @@ client = TestClient(app)
 def test_investigate_api(mock_agent_cls, mock_settings):
     mock_settings.langchain_model_name = "mock-model"
     mock_settings.openai_api_key = "mock-key"
-    
+
     mock_agent = MagicMock()
     mock_agent_cls.return_value = mock_agent
-    
+
     mock_analysis = MagicMock()
     mock_analysis.model_dump.return_value = {
         "summary": "Test Summary",
@@ -21,9 +21,9 @@ def test_investigate_api(mock_agent_cls, mock_settings):
         "severity": "medium"
     }
     mock_agent.investigate.return_value = mock_analysis
-    
+
     response = client.post("/api/investigate", json={"deployment": "dep", "namespace": "ns"})
-    
+
     assert response.status_code == 200
     data = response.json()
     assert data["summary"] == "Test Summary"
@@ -37,24 +37,35 @@ def test_investigate_api_missing_params():
 @patch("kubernetes.client.AppsV1Api")
 @patch("kubernetes.client.CoreV1Api")
 def test_investigate_page(mock_core, mock_apps, mock_config):
-    mock_core_instance = MagicMock()
-    mock_core.return_value = mock_core_instance
-    
-    mock_ns = MagicMock()
-    mock_ns.metadata.name = "default"
-    mock_core_instance.list_namespace.return_value.items = [mock_ns]
-    
-    mock_apps_instance = MagicMock()
-    mock_apps.return_value = mock_apps_instance
-    
-    mock_dep = MagicMock()
-    mock_dep.metadata.name = "nginx"
-    # Fix: Set numeric values for replicas to avoid MagicMock comparison
-    mock_dep.status.ready_replicas = 3
-    mock_dep.spec.replicas = 3
-    mock_apps_instance.list_namespaced_deployment.return_value.items = [mock_dep]
-    
+    """GET /investigate renders the page shell (deployments loaded via JS API)."""
     response = client.get("/investigate")
     assert response.status_code == 200
     assert "On-Demand Investigation" in response.text
-    assert "nginx" in response.text
+    assert "Namespace" in response.text
+
+@patch("kubernetes.config.load_kube_config")
+@patch("kubernetes.client.AppsV1Api")
+@patch("kubernetes.client.CoreV1Api")
+def test_investigate_deployments_api(mock_core, mock_apps, mock_config):
+    """API endpoint returns deployment data from the cluster."""
+    mock_core_instance = MagicMock()
+    mock_core.return_value = mock_core_instance
+
+    mock_ns = MagicMock()
+    mock_ns.metadata.name = "my-app"
+    mock_core_instance.list_namespace.return_value.items = [mock_ns]
+
+    mock_apps_instance = MagicMock()
+    mock_apps.return_value = mock_apps_instance
+
+    mock_dep = MagicMock()
+    mock_dep.metadata.name = "nginx"
+    mock_dep.status.ready_replicas = 3
+    mock_dep.spec.replicas = 3
+    mock_apps_instance.list_namespaced_deployment.return_value.items = [mock_dep]
+
+    response = client.get("/api/investigate/deployments")
+    assert response.status_code == 200
+    data = response.json()
+    assert "my-app" in data["deployments"]
+    assert "nginx" in data["deployments"]["my-app"]

@@ -1,12 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Project Fyr Contributors
 """Database models and repository helpers."""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from project_fyr import utcnow
 from typing import Iterator, Optional, Any
 
-from sqlalchemy import JSON, DateTime, Enum as SAEnum, Integer, String, create_engine, select, update, func
+from sqlalchemy import JSON, DateTime, Enum as SAEnum, Integer, String, create_engine, select, update
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from .config import settings
@@ -79,7 +82,7 @@ class AlertRecord(Base):
     annotations: Mapped[dict] = mapped_column(JSON)
     payload: Mapped[dict] = mapped_column(JSON)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
+
     # Batching
     batched: Mapped[bool] = mapped_column(Integer, default=0)  # SQLite bool
     batch_id: Mapped[Optional[int]] = mapped_column(Integer, index=True, nullable=True)
@@ -91,14 +94,14 @@ class InvestigationJob(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     type: Mapped[str] = mapped_column(String(50))  # rollout | alert | namespace
     status: Mapped[str] = mapped_column(String(50), default="pending")
-    
+
     # Polymorphic-ish FKs
     rollout_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     alert_batch_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     namespace_incident_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    
+
     analysis_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -157,8 +160,9 @@ def init_db(database_url: str):
 
 
 class RolloutRepo:
-    def __init__(self, engine):
+    def __init__(self, engine, annotation_prefix: str = "project-fyr.io"):
         self._engine = engine
+        self._annotation_prefix = annotation_prefix
 
     @contextmanager
     def session(self) -> Iterator[Session]:
@@ -200,10 +204,10 @@ class RolloutRepo:
         ).order_by(Rollout.id.asc())  # FIFO order
         with self.session() as s:
             return list(s.scalars(stmt))
-    
+
     def list_for_speculative_analysis(self, cluster: str, grace_seconds: int) -> list[Rollout]:
         """Find ROLLING_OUT rollouts past grace period that haven't been analyzed yet."""
-        threshold_time = datetime.utcnow() - timedelta(seconds=grace_seconds)
+        threshold_time = utcnow() - timedelta(seconds=grace_seconds)
         stmt = select(Rollout).where(
             Rollout.cluster == cluster,
             Rollout.status == RolloutStatus.ROLLING_OUT,
@@ -212,7 +216,7 @@ class RolloutRepo:
         ).order_by(Rollout.id.asc())  # FIFO order
         with self.session() as s:
             return list(s.scalars(stmt))
-    
+
     def list_speculative_now_failed(self, cluster: str) -> list[Rollout]:
         """Find rollouts with speculative analysis that are now FAILED (ready for notification)."""
         stmt = select(Rollout).where(
@@ -222,7 +226,7 @@ class RolloutRepo:
         ).order_by(Rollout.id.asc())
         with self.session() as s:
             return list(s.scalars(stmt))
-    
+
     def list_speculative_now_success(self, cluster: str) -> list[Rollout]:
         """Find rollouts with speculative analysis that succeeded (should discard analysis)."""
         stmt = select(Rollout).where(
@@ -232,11 +236,11 @@ class RolloutRepo:
         )
         with self.session() as s:
             return list(s.scalars(stmt))
-    
+
     def list_stuck_pending(self, cluster: str, threshold_seconds: int) -> list[Rollout]:
         """Find PENDING rollouts that have been pending for longer than threshold."""
-        from datetime import datetime, timedelta
-        threshold_time = datetime.utcnow() - timedelta(seconds=threshold_seconds)
+        from datetime import timedelta
+        threshold_time = utcnow() - timedelta(seconds=threshold_seconds)
         stmt = select(Rollout).where(
             Rollout.cluster == cluster,
             Rollout.status == RolloutStatus.PENDING,
@@ -251,13 +255,12 @@ class RolloutRepo:
         limit: int = 50,
         exclude_system: bool = True,
         requestor: Optional[str] = None,
-        offset: int = 0,
     ) -> list[Rollout]:
         stmt = select(Rollout)
         if exclude_system:
             stmt = stmt.where(Rollout.namespace.notin_(settings.system_namespaces))
         stmt = self._apply_requestor_filter(stmt, requestor)
-        stmt = stmt.order_by(Rollout.id.desc()).offset(offset).limit(limit)
+        stmt = stmt.order_by(Rollout.id.desc()).limit(limit)
         with self.session() as s:
             return list(s.scalars(stmt))
 
@@ -267,7 +270,6 @@ class RolloutRepo:
         limit: int = 50,
         exclude_system: bool = True,
         requestor: Optional[str] = None,
-        offset: int = 0,
     ) -> list[Rollout]:
         """List rollouts filtered by status."""
         # Convert string to RolloutStatus enum
@@ -276,14 +278,14 @@ class RolloutRepo:
         except (KeyError, AttributeError):
             # If invalid status, return empty list
             return []
-        
+
         stmt = select(Rollout).where(
             Rollout.status == status_enum
         )
         if exclude_system:
             stmt = stmt.where(Rollout.namespace.notin_(settings.system_namespaces))
         stmt = self._apply_requestor_filter(stmt, requestor)
-        stmt = stmt.order_by(Rollout.id.desc()).offset(offset).limit(limit)
+        stmt = stmt.order_by(Rollout.id.desc()).limit(limit)
         with self.session() as s:
             return list(s.scalars(stmt))
 
@@ -292,25 +294,24 @@ class RolloutRepo:
         namespace: str,
         limit: int = 50,
         requestor: Optional[str] = None,
-        offset: int = 0,
     ) -> list[Rollout]:
         """List rollouts filtered by namespace."""
         stmt = select(Rollout).where(
             Rollout.namespace == namespace
-        ).order_by(Rollout.id.desc()).offset(offset).limit(limit)
+        ).order_by(Rollout.id.desc()).limit(limit)
         stmt = self._apply_requestor_filter(stmt, requestor)
         with self.session() as s:
             return list(s.scalars(stmt))
 
     def get_stats(self, hours: int = 24, exclude_system: bool = True) -> dict[str, int]:
         """Get rollout statistics for the last N hours."""
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
-        
+        cutoff = utcnow() - timedelta(hours=hours)
+
         # Total rollouts in window
         stmt_total = select(Rollout).where(Rollout.started_at >= cutoff)
         if exclude_system:
             stmt_total = stmt_total.where(Rollout.namespace.notin_(settings.system_namespaces))
-        
+
         # Success count
         stmt_success = select(Rollout).where(
             Rollout.started_at >= cutoff,
@@ -318,7 +319,7 @@ class RolloutRepo:
         )
         if exclude_system:
             stmt_success = stmt_success.where(Rollout.namespace.notin_(settings.system_namespaces))
-        
+
         # Failed count
         stmt_failed = select(Rollout).where(
             Rollout.started_at >= cutoff,
@@ -331,7 +332,7 @@ class RolloutRepo:
             total = len(list(s.scalars(stmt_total)))
             success = len(list(s.scalars(stmt_success)))
             failed = len(list(s.scalars(stmt_failed)))
-            
+
         return {
             "total": total,
             "success": success,
@@ -341,8 +342,8 @@ class RolloutRepo:
 
     def get_recent_failures(self, limit: int = 50, hours: int = 24, exclude_system: bool = True) -> list[tuple[Rollout, Optional[AnalysisRecord]]]:
         """Get failed rollouts with their analysis records for the last N hours."""
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
-        
+        cutoff = utcnow() - timedelta(hours=hours)
+
         # Join Rollout with AnalysisRecord
         stmt = (
             select(Rollout, AnalysisRecord)
@@ -356,7 +357,7 @@ class RolloutRepo:
         if exclude_system:
             stmt = stmt.where(Rollout.namespace.notin_(settings.system_namespaces))
         stmt = stmt.order_by(Rollout.id.desc()).limit(limit)
-        
+
         with self.session() as s:
             # Result is a list of Row objects (tuples)
             results = s.execute(stmt).all()
@@ -369,50 +370,26 @@ class RolloutRepo:
         namespace: str,
         limit: int = 50,
         requestor: Optional[str] = None,
-        offset: int = 0,
     ) -> list[Rollout]:
         """List rollouts filtered by both status and namespace."""
         try:
             status_enum = RolloutStatus[status.upper()]
         except (KeyError, AttributeError):
             return []
-        
+
         stmt = select(Rollout).where(
             Rollout.status == status_enum,
             Rollout.namespace == namespace
-        ).order_by(Rollout.id.desc()).offset(offset).limit(limit)
+        ).order_by(Rollout.id.desc()).limit(limit)
         stmt = self._apply_requestor_filter(stmt, requestor)
         with self.session() as s:
             return list(s.scalars(stmt))
-
-    def count_rollouts(
-        self,
-        status: Optional[str] = None,
-        namespace: Optional[str] = None,
-        requestor: Optional[str] = None,
-        exclude_system: bool = True,
-    ) -> int:
-        """Count total rollouts matching filters (for pagination)."""
-        stmt = select(func.count(Rollout.id))
-        if status:
-            try:
-                status_enum = RolloutStatus[status.upper()]
-                stmt = stmt.where(Rollout.status == status_enum)
-            except (KeyError, AttributeError):
-                return 0
-        if namespace:
-            stmt = stmt.where(Rollout.namespace == namespace)
-        if exclude_system:
-            stmt = stmt.where(Rollout.namespace.notin_(settings.system_namespaces))
-        stmt = self._apply_requestor_filter(stmt, requestor)
-        with self.session() as s:
-            return s.scalar(stmt) or 0
 
     def _apply_requestor_filter(self, stmt, requestor: Optional[str]):
         if not requestor:
             return stmt
         return stmt.where(
-            Rollout.metadata_json["example.com/requestor-email"].as_string() == requestor
+            Rollout.metadata_json[f"{self._annotation_prefix}/requestor-email"].as_string() == requestor
         )
 
     def get_by_id(self, rollout_id: int) -> Optional[Rollout]:
@@ -471,29 +448,6 @@ class RolloutRepo:
             s.execute(stmt)
             s.commit()
 
-    def discard_analysis(self, rollout_id: int, reason: str | None = None) -> None:
-        """Discard analysis for a rollout and prevent notifications."""
-        with self.session() as s:
-            rollout = s.get(Rollout, rollout_id)
-            if not rollout:
-                return
-
-            metadata = dict(rollout.metadata_json or {})
-            if reason:
-                metadata["discard_reason"] = reason
-
-            stmt = (
-                update(Rollout)
-                .where(Rollout.id == rollout_id)
-                .values(
-                    analysis_status=AnalysisStatus.DISCARDED,
-                    notify_status=NotifyStatus.FAILED,
-                    metadata_json=metadata,
-                )
-            )
-            s.execute(stmt)
-            s.commit()
-
     def promote_speculative(self, rollout_id: int) -> None:
         """Promote speculative analysis to DONE (rollout confirmed failed, ready for notification)."""
         stmt = (
@@ -522,7 +476,7 @@ class RolloutRepo:
         speculative: bool = False,
     ) -> None:
         """Save analysis results.
-        
+
         Args:
             speculative: If True, sets analysis_status to SPECULATIVE instead of DONE.
                         This allows holding notification until rollout status is confirmed.
@@ -537,7 +491,7 @@ class RolloutRepo:
             )
             s.add(record)
             s.flush()
-            
+
             new_status = AnalysisStatus.SPECULATIVE if speculative else AnalysisStatus.DONE
             status_stmt = (
                 update(Rollout)
@@ -566,32 +520,32 @@ class RolloutRepo:
             rollout = s.get(Rollout, rollout_id)
             if not rollout:
                 return
-            
+
             metadata = dict(rollout.metadata_json or {})
             trigger_context = metadata.get("trigger_context", {})
-            
+
             # Set or update trigger reason
             trigger_context["trigger_reason"] = trigger_reason
-            
+
             # Append to observed failures (keeping history)
             existing_failures = trigger_context.get("observed_failures", [])
             for obs in failure_observations:
                 if obs not in existing_failures:
                     existing_failures.append(obs)
             trigger_context["observed_failures"] = existing_failures[-10:]  # Keep last 10
-            
+
             # Track transient failures
             if is_transient:
                 trigger_context["transient_failures_detected"] = True
-            
+
             if time_to_failure_seconds is not None:
                 trigger_context["time_to_failure_seconds"] = time_to_failure_seconds
-            
+
             if failure_type is not None:
                 trigger_context["failure_type"] = failure_type
-            
+
             metadata["trigger_context"] = trigger_context
-            
+
             stmt = update(Rollout).where(Rollout.id == rollout_id).values(metadata_json=metadata)
             s.execute(stmt)
             s.commit()
@@ -620,8 +574,8 @@ class RolloutRepo:
 
     def get_cached_insights(self, cluster: str, hours: int, ttl_minutes: int) -> Optional[AggregatedInsight]:
         """Get cached aggregated insights if they exist and are fresh."""
-        cutoff = datetime.utcnow() - timedelta(minutes=ttl_minutes)
-        
+        cutoff = utcnow() - timedelta(minutes=ttl_minutes)
+
         stmt = (
             select(AggregatedInsight)
             .where(
@@ -632,14 +586,14 @@ class RolloutRepo:
             .order_by(AggregatedInsight.generated_at.desc())
             .limit(1)
         )
-        
+
         with self.session() as s:
             return s.scalars(stmt).first()
 
     def save_cached_insights(
-        self, 
-        cluster: str, 
-        hours: int, 
+        self,
+        cluster: str,
+        hours: int,
         insights: dict[str, Any],
         failure_count: int
     ) -> AggregatedInsight:
@@ -649,31 +603,31 @@ class RolloutRepo:
             hours=hours,
             insights=insights,
             failure_count=failure_count,
-            generated_at=datetime.utcnow()
+            generated_at=utcnow()
         )
-        
+
         with self.session() as s:
             s.add(cached)
             s.commit()
             s.refresh(cached)
-        
+
         return cached
 
     def cleanup_old_insights(self, days: int = 7) -> int:
         """Delete cached insights older than specified days."""
-        cutoff = datetime.utcnow() - timedelta(days=days)
-        
+        cutoff = utcnow() - timedelta(days=days)
+
         stmt = select(AggregatedInsight).where(AggregatedInsight.generated_at < cutoff)
-        
+
         with self.session() as s:
             old_insights = list(s.scalars(stmt))
             count = len(old_insights)
-            
+
             for insight in old_insights:
                 s.delete(insight)
-            
+
             s.commit()
-        
+
         return count
 
 
@@ -700,7 +654,7 @@ class AlertRepo:
             AlertRecord.batched == 0,
             AlertRecord.received_at >= window_start
         ).order_by(AlertRecord.received_at.asc())
-        
+
         with self.session() as s:
             return list(s.scalars(stmt))
 
@@ -709,7 +663,7 @@ class AlertRepo:
             batch = AlertBatchRecord(context_summary=summary, **kwargs)
             s.add(batch)
             s.flush()
-            
+
             # Update alerts
             alert_ids = [a.id for a in alerts]
             stmt = update(AlertRecord).where(AlertRecord.id.in_(alert_ids)).values(
@@ -717,7 +671,7 @@ class AlertRepo:
                 batch_id=batch.id
             )
             s.execute(stmt)
-            
+
             # Create job
             job = InvestigationJob(
                 type="alert",
@@ -725,7 +679,7 @@ class AlertRepo:
                 status="pending"
             )
             s.add(job)
-            
+
             s.commit()
             s.refresh(batch)
             return batch
@@ -734,7 +688,7 @@ class AlertRepo:
         stmt = select(InvestigationJob).where(InvestigationJob.status == "pending")
         with self.session() as s:
             return list(s.scalars(stmt))
-    
+
     def get_pending_namespace_jobs(self) -> list[InvestigationJob]:
         """Get pending investigation jobs for namespace incidents."""
         stmt = select(InvestigationJob).where(
@@ -753,7 +707,7 @@ class AlertRepo:
         stmt = select(AlertRecord).where(AlertRecord.batch_id == batch_id)
         with self.session() as s:
             return list(s.scalars(stmt))
-    
+
     def update_job_status(self, job_id: int, status: str, **timestamps) -> None:
         stmt = update(InvestigationJob).where(InvestigationJob.id == job_id).values(status=status, **timestamps)
         with self.session() as s:
@@ -790,7 +744,7 @@ class AlertRepo:
                 state.last_received_at = now
                 if investigated:
                     state.last_investigated_at = now
-            
+
             s.commit()
             s.refresh(state)
             return state
@@ -822,7 +776,7 @@ class NamespaceIncidentRepo:
             incident_type_enum = NamespaceIncidentType[incident_type.upper()]
         except (KeyError, AttributeError):
             return None
-        
+
         stmt = select(NamespaceIncidentRecord).where(
             NamespaceIncidentRecord.cluster == cluster,
             NamespaceIncidentRecord.namespace == namespace,
@@ -864,7 +818,7 @@ class NamespaceIncidentRepo:
             .where(NamespaceIncidentRecord.id == incident_id)
             .values(
                 status=NamespaceIncidentStatus.RESOLVED,
-                resolved_at=datetime.utcnow()
+                resolved_at=utcnow()
             )
         )
         with self.session() as s:
@@ -923,15 +877,15 @@ class NamespaceIncidentRepo:
             s.commit()
 
     def count_investigations_in_window(
-        self, 
+        self,
         cluster: str,
         namespace: Optional[str] = None,
         hours: int = 1
     ) -> int:
         """Count investigations (rollouts + incidents) in time window for rate limiting."""
         from datetime import timedelta
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
-        
+        cutoff = utcnow() - timedelta(hours=hours)
+
         with self.session() as s:
             # Count rollout investigations
             rollout_stmt = select(Rollout).where(
@@ -941,7 +895,7 @@ class NamespaceIncidentRepo:
             if namespace:
                 rollout_stmt = rollout_stmt.where(Rollout.namespace == namespace)
             rollout_count = len(list(s.scalars(rollout_stmt)))
-            
+
             # Count namespace incident investigations
             incident_stmt = select(NamespaceIncidentRecord).where(
                 NamespaceIncidentRecord.cluster == cluster,
@@ -950,5 +904,5 @@ class NamespaceIncidentRepo:
             if namespace:
                 incident_stmt = incident_stmt.where(NamespaceIncidentRecord.namespace == namespace)
             incident_count = len(list(s.scalars(incident_stmt)))
-            
+
             return rollout_count + incident_count

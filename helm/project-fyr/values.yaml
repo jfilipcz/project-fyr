@@ -144,7 +144,7 @@ config:
     signingSecret: ""
   
   # Fyr Dashboard base URL (for deep links in Slack messages)
-  # e.g., https://fyr.internal.company.com
+  # e.g., https://fyr.example.com
   dashboardBaseUrl: ""
   
   # OpenAI API key - recommend using existingSecret instead
@@ -171,8 +171,8 @@ auth:
   
   # SSO Configuration (Microsoft Entra ID / Azure AD)
   sso:
-    # SSO provider: 'entra', 'okta', 'generic_oidc'
-    provider: entra
+    # SSO provider: 'none', 'entra', 'generic_oidc'
+    provider: none
     # Azure AD / Entra ID tenant ID - set via existingSecret or override
     tenantId: ""
     # Application (client) ID from Azure AD app registration - set via existingSecret or override
