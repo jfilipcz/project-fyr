@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Database engine is now a singleton (shared across requests) instead of being created per-request
 - Replaced all `datetime.utcnow()` calls with timezone-aware `utcnow()` helper
 - Replaced all bare `except:` clauses with `except Exception:`
+- Analyzer now batch-checks namespace existence before processing rollouts — dramatically reduces queue processing time when ephemeral CI namespaces are deleted
 
 
 ### Security
