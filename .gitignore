@@ -217,11 +217,13 @@ override-values.yaml
 run_local_azure.sh
 slack_messages.log
 
-# Agent notes (for AI assistants only)
+# Agent notes and scratch docs
 agents.md
 .opencode/
 conversation-summary.md
 docs/plans/
+docs/analysis-triggering-*
+docs/diagrams/analysis-*
 
 # Editor/IDE settings
 .vscode/
