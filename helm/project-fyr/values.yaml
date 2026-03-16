@@ -107,11 +107,22 @@ rbac:
 # Application configuration
 config:
   # Database connection string (SQLite for development, MySQL/PostgreSQL for production)
-  databaseUrl: mysql+pymysql://projectfyr:changeme@project-fyr-mysql:3306/projectfyr
+  databaseUrl: mysql+pymysql://projectfyr:projectfyr-dev-password@project-fyr-mysql:3306/projectfyr
   # Name of your Kubernetes cluster (shown in Slack notifications)
   clusterName: my-cluster
   # Timeout in seconds before marking a rollout as failed
   rolloutTimeoutSeconds: 900
+  # Rollout transient handling policy
+  rolloutTransientClassificationMode: hybrid
+  rolloutTransientInvestigationMode: immediate
+  rolloutTransientSlackMode: actionable_only
+  rolloutTransientPersistenceWindowSeconds: 300
+  rolloutTransientFailureTypes:
+    - unschedulable
+    - transient_image_pull
+    - dependency_unready
+  rolloutTransientObservationPatterns: []
+  rolloutImmediateActionableFailureTypes: []
   
   # Watch behavior configuration
   # If true, monitor ALL deployments regardless of labels/annotations
@@ -132,6 +143,10 @@ config:
   slackDefaultChannel: "#alerts"
   # Optional: Override Slack API URL (useful for testing with mock service)
   slackApiUrl: ""
+  # Enable direct messages to namespace requestor email annotation.
+  enableRequestorDm: false
+  # Enable owner channel routing from deployment label.
+  enableOwnerChannel: false
   
   # Slack Socket Mode configuration (for slash commands without public URL)
   slack:
@@ -161,11 +176,15 @@ config:
   prometheusUrl: ""
   # Show triage assignment block in Slack notifications
   showTriageInSlack: false
+  # Block secret-extraction prompts in interactive dashboard chat
+  chatPolicyEnabled: true
+  # Redact credential-like patterns from dashboard chat responses
+  chatOutputRedactionEnabled: true
 
 # Authentication configuration
 auth:
   # Enable authentication for dashboard access
-  enabled: true
+  enabled: false
   # Authentication mode: 'sso', 'local', or 'hybrid'
   mode: hybrid
   
@@ -183,7 +202,7 @@ auth:
   # Local Authentication Configuration
   local:
     # Enable local username/password authentication
-    enabled: true
+    enabled: false
     # JWT secret for token signing (recommend using existingSecret instead)
     # Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
     jwtSecret: ""
@@ -208,18 +227,20 @@ auth:
 secrets:
   # Name of an existing Secret created by External Secret Operator that contains
   # any PROJECT_FYR_* keys (e.g., Slack tokens, OpenAI API keys, DB credentials).
+  # Leave empty to use only the chart-managed Secret rendered from inline values.
   # For auth, can include:
   #   PROJECT_FYR_SSO_CLIENT_SECRET
   #   PROJECT_FYR_LOCAL_AUTH_JWT_SECRET
   #   PROJECT_FYR_ADMIN_PASSWORD
-  existingSecret: "fyr-auth-secrets"
+  existingSecret: ""
 
 mysql:
   enabled: true
-  database: projectfyr
-  user: projectfyr
-  password: "changeme"
-  rootPassword: "changeme-root"
+  auth:
+    database: projectfyr
+    username: projectfyr
+    password: "projectfyr-dev-password"
+    rootPassword: "projectfyr-dev-root-password"
   persistence:
     enabled: true
     size: 10Gi

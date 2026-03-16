@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime, timedelta
 from project_fyr import utcnow
 
@@ -18,6 +18,23 @@ from langchain_core.tools import tool
 from .config import settings
 
 logger = logging.getLogger(__name__)
+
+NOISY_METADATA_KEYS = {
+    "managed_fields",
+    "managedFields",
+    "uid",
+    "resource_version",
+    "resourceVersion",
+    "generation",
+    "creation_timestamp",
+    "creationTimestamp",
+    "self_link",
+    "selfLink",
+}
+
+NOISY_ANNOTATIONS = {
+    "kubectl.kubernetes.io/last-applied-configuration",
+}
 
 
 def _get_core_v1() -> client.CoreV1Api:
@@ -47,12 +64,334 @@ def _clean_metadata(obj: dict) -> dict:
     """Remove noisy fields from k8s object metadata."""
     if "metadata" in obj:
         meta = obj["metadata"]
-        for key in ["managedFields", "uid", "resourceVersion", "generation", "creationTimestamp"]:
+        for key in NOISY_METADATA_KEYS:
             meta.pop(key, None)
         if "annotations" in meta and meta["annotations"]:
-            # Remove kubectl-last-applied-configuration as it's huge
-            meta["annotations"].pop("kubectl.kubernetes.io/last-applied-configuration", None)
+            for key in NOISY_ANNOTATIONS:
+                meta["annotations"].pop(key, None)
+            if not meta["annotations"]:
+                meta.pop("annotations", None)
     return obj
+
+
+def _drop_empty(value: Any) -> Any:
+    """Recursively remove None/empty dict/list values for concise YAML output."""
+    if isinstance(value, dict):
+        out = {}
+        for key, val in value.items():
+            cleaned = _drop_empty(val)
+            if cleaned is None:
+                continue
+            if cleaned == {} or cleaned == []:
+                continue
+            out[key] = cleaned
+        return out
+    if isinstance(value, list):
+        out = []
+        for val in value:
+            cleaned = _drop_empty(val)
+            if cleaned is None:
+                continue
+            if cleaned == {} or cleaned == []:
+                continue
+            out.append(cleaned)
+        return out
+    return value
+
+
+def _clean_annotations(annotations: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(annotations, dict):
+        return {}
+    return {k: v for k, v in annotations.items() if k not in NOISY_ANNOTATIONS}
+
+
+def _summarize_conditions(conditions: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    out = []
+    for cond in conditions or []:
+        out.append(
+            _drop_empty(
+                {
+                    "type": cond.get("type"),
+                    "status": cond.get("status"),
+                    "reason": cond.get("reason"),
+                    "message": cond.get("message"),
+                    "last_transition_time": cond.get("last_transition_time") or cond.get("lastTransitionTime"),
+                }
+            )
+        )
+    return out
+
+
+def _summarize_state(state: dict[str, Any] | None) -> dict[str, Any]:
+    state = state or {}
+    if state.get("waiting"):
+        waiting = state["waiting"]
+        return _drop_empty(
+            {
+                "waiting": {
+                    "reason": waiting.get("reason"),
+                    "message": waiting.get("message"),
+                }
+            }
+        )
+    if state.get("running"):
+        running = state["running"]
+        return _drop_empty({"running": {"started_at": running.get("started_at")}})
+    if state.get("terminated"):
+        terminated = state["terminated"]
+        return _drop_empty(
+            {
+                "terminated": {
+                    "reason": terminated.get("reason"),
+                    "message": terminated.get("message"),
+                    "exit_code": terminated.get("exit_code"),
+                    "signal": terminated.get("signal"),
+                    "started_at": terminated.get("started_at"),
+                    "finished_at": terminated.get("finished_at"),
+                }
+            }
+        )
+    return {}
+
+
+def _summarize_container_statuses(statuses: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    out = []
+    for status in statuses or []:
+        out.append(
+            _drop_empty(
+                {
+                    "name": status.get("name"),
+                    "ready": status.get("ready"),
+                    "restart_count": status.get("restart_count"),
+                    "state": _summarize_state(status.get("state")),
+                    "last_state": _summarize_state(status.get("last_state")),
+                }
+            )
+        )
+    return out
+
+
+def _summarize_env(env_list: list[dict[str, Any]] | None) -> list[str]:
+    env_names = [item.get("name") for item in (env_list or []) if item.get("name")]
+    if len(env_names) > 25:
+        return env_names[:25] + ["..."]
+    return env_names
+
+
+def _summarize_container(container: dict[str, Any]) -> dict[str, Any]:
+    ports = [
+        _drop_empty(
+            {
+                "name": p.get("name"),
+                "container_port": p.get("container_port"),
+                "protocol": p.get("protocol"),
+            }
+        )
+        for p in (container.get("ports") or [])
+    ]
+
+    return _drop_empty(
+        {
+            "name": container.get("name"),
+            "image": container.get("image"),
+            "command": container.get("command"),
+            "args": container.get("args"),
+            "env": _summarize_env(container.get("env")),
+            "ports": ports,
+            "resources": container.get("resources"),
+            "liveness_probe": container.get("liveness_probe"),
+            "readiness_probe": container.get("readiness_probe"),
+            "startup_probe": container.get("startup_probe"),
+        }
+    )
+
+
+def _summarize_containers(containers: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    return [_summarize_container(container) for container in (containers or [])]
+
+
+def _summarize_volumes(volumes: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    out = []
+    for volume in volumes or []:
+        item: dict[str, Any] = {"name": volume.get("name")}
+        for volume_type in (
+            "persistent_volume_claim",
+            "config_map",
+            "secret",
+            "empty_dir",
+            "projected",
+            "host_path",
+            "csi",
+            "nfs",
+            "downward_api",
+        ):
+            source = volume.get(volume_type)
+            if not source:
+                continue
+            item["type"] = volume_type
+            if volume_type == "persistent_volume_claim":
+                item["claim_name"] = source.get("claim_name")
+            elif volume_type == "config_map":
+                item["config_map_name"] = source.get("name")
+            elif volume_type == "secret":
+                item["secret_name"] = source.get("secret_name")
+            elif volume_type == "host_path":
+                item["path"] = source.get("path")
+            elif volume_type == "csi":
+                item["driver"] = source.get("driver")
+            break
+        out.append(_drop_empty(item))
+    return out
+
+
+def _summarize_metadata(obj: dict[str, Any]) -> dict[str, Any]:
+    metadata = (obj.get("metadata") or {}).copy()
+    cleaned_metadata = _clean_metadata({"metadata": metadata}).get("metadata", {})
+    owner_refs = []
+    for owner in cleaned_metadata.get("owner_references") or cleaned_metadata.get("ownerReferences") or []:
+        owner_refs.append(
+            _drop_empty(
+                {
+                    "kind": owner.get("kind"),
+                    "name": owner.get("name"),
+                    "controller": owner.get("controller"),
+                }
+            )
+        )
+
+    return _drop_empty(
+        {
+            "name": cleaned_metadata.get("name"),
+            "namespace": cleaned_metadata.get("namespace"),
+            "labels": cleaned_metadata.get("labels"),
+            "annotations": _clean_annotations(cleaned_metadata.get("annotations")),
+            "owner_references": owner_refs,
+        }
+    )
+
+
+def _summarize_pod(obj: dict[str, Any]) -> dict[str, Any]:
+    spec = obj.get("spec") or {}
+    status = obj.get("status") or {}
+    return _drop_empty(
+        {
+            "api_version": obj.get("api_version"),
+            "kind": obj.get("kind"),
+            "metadata": _summarize_metadata(obj),
+            "spec": {
+                "node_name": spec.get("node_name"),
+                "service_account_name": spec.get("service_account_name"),
+                "priority_class_name": spec.get("priority_class_name"),
+                "restart_policy": spec.get("restart_policy"),
+                "containers": _summarize_containers(spec.get("containers")),
+                "init_containers": _summarize_containers(spec.get("init_containers")),
+                "volumes": _summarize_volumes(spec.get("volumes")),
+            },
+            "status": {
+                "phase": status.get("phase"),
+                "reason": status.get("reason"),
+                "message": status.get("message"),
+                "start_time": status.get("start_time"),
+                "pod_ip": status.get("pod_ip"),
+                "host_ip": status.get("host_ip"),
+                "qos_class": status.get("qos_class"),
+                "conditions": _summarize_conditions(status.get("conditions")),
+                "init_container_statuses": _summarize_container_statuses(status.get("init_container_statuses")),
+                "container_statuses": _summarize_container_statuses(status.get("container_statuses")),
+            },
+        }
+    )
+
+
+def _summarize_deployment(obj: dict[str, Any]) -> dict[str, Any]:
+    spec = obj.get("spec") or {}
+    status = obj.get("status") or {}
+    selector = spec.get("selector") or {}
+    template = spec.get("template") or {}
+    template_spec = template.get("spec") or {}
+    template_meta = template.get("metadata") or {}
+    return _drop_empty(
+        {
+            "api_version": obj.get("api_version"),
+            "kind": obj.get("kind"),
+            "metadata": _summarize_metadata(obj),
+            "spec": {
+                "replicas": spec.get("replicas"),
+                "progress_deadline_seconds": spec.get("progress_deadline_seconds"),
+                "strategy": spec.get("strategy"),
+                "selector": {"match_labels": selector.get("match_labels")},
+                "template": {
+                    "metadata": {
+                        "labels": template_meta.get("labels"),
+                        "annotations": _clean_annotations(template_meta.get("annotations")),
+                    },
+                    "spec": {
+                        "service_account_name": template_spec.get("service_account_name"),
+                        "containers": _summarize_containers(template_spec.get("containers")),
+                        "init_containers": _summarize_containers(template_spec.get("init_containers")),
+                        "volumes": _summarize_volumes(template_spec.get("volumes")),
+                    },
+                },
+            },
+            "status": {
+                "observed_generation": status.get("observed_generation"),
+                "replicas": status.get("replicas"),
+                "updated_replicas": status.get("updated_replicas"),
+                "ready_replicas": status.get("ready_replicas"),
+                "available_replicas": status.get("available_replicas"),
+                "unavailable_replicas": status.get("unavailable_replicas"),
+                "conditions": _summarize_conditions(status.get("conditions")),
+            },
+        }
+    )
+
+
+def _summarize_service(obj: dict[str, Any]) -> dict[str, Any]:
+    spec = obj.get("spec") or {}
+    status = obj.get("status") or {}
+    ports = [
+        _drop_empty(
+            {
+                "name": p.get("name"),
+                "protocol": p.get("protocol"),
+                "port": p.get("port"),
+                "target_port": p.get("target_port"),
+                "node_port": p.get("node_port"),
+            }
+        )
+        for p in (spec.get("ports") or [])
+    ]
+    ingress = [
+        _drop_empty({"ip": item.get("ip"), "hostname": item.get("hostname")})
+        for item in ((status.get("load_balancer") or {}).get("ingress") or [])
+    ]
+    return _drop_empty(
+        {
+            "api_version": obj.get("api_version"),
+            "kind": obj.get("kind"),
+            "metadata": _summarize_metadata(obj),
+            "spec": {
+                "type": spec.get("type"),
+                "cluster_ip": spec.get("cluster_ip"),
+                "external_ips": spec.get("external_ips"),
+                "selector": spec.get("selector"),
+                "ports": ports,
+            },
+            "status": {
+                "load_balancer_ingress": ingress,
+            },
+        }
+    )
+
+
+def _summarize_resource(kind: str, obj: dict[str, Any]) -> dict[str, Any]:
+    if kind == "pod":
+        return _summarize_pod(obj)
+    if kind == "deployment":
+        return _summarize_deployment(obj)
+    if kind == "service":
+        return _summarize_service(obj)
+    return _drop_empty(_clean_metadata(obj))
 
 
 @tool
@@ -128,12 +467,10 @@ def k8s_describe(kind: str, name: str, namespace: str) -> str:
         else:
             return f"Error: Unsupported resource kind '{kind}'"
 
-        # Convert to dict and clean up
+        # Convert to dict and return a concise, meaningful view.
         obj_dict = obj.to_dict()
-        clean_obj = _clean_metadata(obj_dict)
-
-        # Dump to YAML for readability
-        return yaml.dump(clean_obj)
+        summarized = _summarize_resource(kind.lower(), obj_dict)
+        return yaml.dump(summarized, sort_keys=False)
 
     except ApiException as e:
         if e.status == 404:

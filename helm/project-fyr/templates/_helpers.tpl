@@ -14,6 +14,10 @@
 {{- printf "%s-dashboard" (include "project-fyr.fullname" .) -}}
 {{- end -}}
 
+{{- define "project-fyr.inlineSecretName" -}}
+{{- printf "%s-secret" (include "project-fyr.fullname" .) -}}
+{{- end -}}
+
 {{- define "project-fyr.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}

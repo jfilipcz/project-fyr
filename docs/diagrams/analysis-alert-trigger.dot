@@ -1,0 +1,22 @@
+digraph alert_trigger {
+  graph [rankdir=LR, fontsize=11, labelloc=t, label="Alert-Driven Analysis Trigger"];
+  node [shape=box, style="rounded,filled", fillcolor="#f5fff0", color="#4f8a3c", fontname="Arial", fontsize=10];
+  edge [color="#4a4a4a", fontname="Arial", fontsize=9];
+
+  src [label="Alertmanager / Grafana\nPOST /webhook/alert"];
+  webhook [label="webhook.receive_alert()"];
+  save [label="AlertRepo.create_alert()\nAlertRepo.update_state()"];
+  throttle [label="Trigger decision\n- new firing alert\n- persistent firing after 24h\n- otherwise throttled / resolved"];
+  batcher [label="AlertBatcher.run_once()\nevery 10s"];
+  batch [label="AlertRepo.create_batch()\ncreates InvestigationJob(type=alert)"];
+  worker [label="AnalysisWorker._process_alert_jobs()\nevery 15s"];
+  agent [label="InvestigatorAgent.investigate(..., alert_context=...)"];
+  slack [label="SlackNotifier.send_alert_batch()"];
+  done [label="AlertRepo.update_job_status(done)"];
+  skip [label="Mark alert hidden from batcher\n(batched/skipped)"];
+
+  src -> webhook -> save -> throttle;
+  throttle -> batcher [label="should investigate"];
+  batcher -> batch -> worker -> agent -> slack -> done;
+  throttle -> skip [label="resolved or throttled"];
+}

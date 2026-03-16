@@ -220,6 +220,8 @@ slack_messages.log
 # Agent notes (for AI assistants only)
 agents.md
 .opencode/
+conversation-summary.md
+docs/plans/
 
 # Editor/IDE settings
 .vscode/
@@ -234,3 +236,7 @@ Thumbs.db
 
 # Secrets directory (for create-slack-secrets.sh)
 secrets/
+
+# Local Slack app manifests
+slack-app-manifest-ci.local.json
+slack-app-manifest-dev.local.json

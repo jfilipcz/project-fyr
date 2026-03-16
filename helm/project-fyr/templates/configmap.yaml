@@ -7,9 +7,15 @@ metadata:
     app.kubernetes.io/name: project-fyr
     app.kubernetes.io/component: config
 data:
-  PROJECT_FYR_DATABASE_URL: {{ tpl .Values.config.databaseUrl . | quote }}
   PROJECT_FYR_K8S_CLUSTER_NAME: {{ .Values.config.clusterName | quote }}
   PROJECT_FYR_ROLLOUT_TIMEOUT_SECONDS: {{ .Values.config.rolloutTimeoutSeconds | quote }}
+  PROJECT_FYR_ROLLOUT_TRANSIENT_CLASSIFICATION_MODE: {{ .Values.config.rolloutTransientClassificationMode | quote }}
+  PROJECT_FYR_ROLLOUT_TRANSIENT_INVESTIGATION_MODE: {{ .Values.config.rolloutTransientInvestigationMode | quote }}
+  PROJECT_FYR_ROLLOUT_TRANSIENT_SLACK_MODE: {{ .Values.config.rolloutTransientSlackMode | quote }}
+  PROJECT_FYR_ROLLOUT_TRANSIENT_PERSISTENCE_WINDOW_SECONDS: {{ .Values.config.rolloutTransientPersistenceWindowSeconds | quote }}
+  PROJECT_FYR_ROLLOUT_TRANSIENT_FAILURE_TYPES: {{ join "," .Values.config.rolloutTransientFailureTypes | quote }}
+  PROJECT_FYR_ROLLOUT_TRANSIENT_OBSERVATION_PATTERNS: {{ join "," .Values.config.rolloutTransientObservationPatterns | quote }}
+  PROJECT_FYR_ROLLOUT_IMMEDIATE_ACTIONABLE_FAILURE_TYPES: {{ join "," .Values.config.rolloutImmediateActionableFailureTypes | quote }}
   {{- if hasKey .Values.config "watchAllNamespaces" }}
   PROJECT_FYR_WATCH_ALL_NAMESPACES: {{ .Values.config.watchAllNamespaces | quote }}
   {{- end }}
@@ -19,8 +25,13 @@ data:
   {{- if .Values.config.systemNamespaces }}
   PROJECT_FYR_SYSTEM_NAMESPACES_STR: {{ .Values.config.systemNamespaces | quote }}
   {{- end }}
-  PROJECT_FYR_SLACK_BOT_TOKEN: {{ .Values.config.slackBotToken | quote }}
   PROJECT_FYR_SLACK_DEFAULT_CHANNEL: {{ .Values.config.slackDefaultChannel | quote }}
+  {{- if hasKey .Values.config "enableRequestorDm" }}
+  PROJECT_FYR_ENABLE_REQUESTOR_DM: {{ .Values.config.enableRequestorDm | quote }}
+  {{- end }}
+  {{- if hasKey .Values.config "enableOwnerChannel" }}
+  PROJECT_FYR_ENABLE_OWNER_CHANNEL: {{ .Values.config.enableOwnerChannel | quote }}
+  {{- end }}
   {{- if .Values.config.slackApiUrl }}
   PROJECT_FYR_SLACK_API_URL: {{ .Values.config.slackApiUrl | quote }}
   {{- end }}
@@ -33,7 +44,15 @@ data:
   {{- if .Values.config.dashboardBaseUrl }}
   PROJECT_FYR_DASHBOARD_BASE_URL: {{ .Values.config.dashboardBaseUrl | quote }}
   {{- end }}
-  PROJECT_FYR_OPENAI_API_KEY: {{ .Values.config.openaiApiKey | quote }}
+  {{- if .Values.config.openaiApiBase }}
+  PROJECT_FYR_OPENAI_API_BASE: {{ .Values.config.openaiApiBase | quote }}
+  {{- end }}
+  {{- if .Values.config.openaiApiVersion }}
+  PROJECT_FYR_OPENAI_API_VERSION: {{ .Values.config.openaiApiVersion | quote }}
+  {{- end }}
+  {{- if .Values.config.azureDeployment }}
+  PROJECT_FYR_AZURE_DEPLOYMENT: {{ .Values.config.azureDeployment | quote }}
+  {{- end }}
   PROJECT_FYR_LANGCHAIN_MODEL_NAME: {{ .Values.config.langchainModelName | quote }}
   {{- if .Values.config.prometheusUrl }}
   PROJECT_FYR_PROMETHEUS_URL: {{ .Values.config.prometheusUrl | quote }}
@@ -41,10 +60,12 @@ data:
   {{- if hasKey .Values.config "showTriageInSlack" }}
   PROJECT_FYR_SHOW_TRIAGE_IN_SLACK: {{ .Values.config.showTriageInSlack | quote }}
   {{- end }}
-  PROJECT_FYR_LOG_TAIL_SECONDS: {{ .Values.config.logTailSeconds | quote }}
-  PROJECT_FYR_MAX_LOG_LINES: {{ .Values.config.maxLogLines | quote }}
-  PROJECT_FYR_REDUCER_MAX_EVENTS: {{ .Values.config.reducerMaxEvents | quote }}
-  PROJECT_FYR_REDUCER_MAX_CLUSTERS: {{ .Values.config.reducerMaxClusters | quote }}
+  {{- if hasKey .Values.config "chatPolicyEnabled" }}
+  PROJECT_FYR_CHAT_POLICY_ENABLED: {{ .Values.config.chatPolicyEnabled | quote }}
+  {{- end }}
+  {{- if hasKey .Values.config "chatOutputRedactionEnabled" }}
+  PROJECT_FYR_CHAT_OUTPUT_REDACTION_ENABLED: {{ .Values.config.chatOutputRedactionEnabled | quote }}
+  {{- end }}
   {{- if .Values.auth.enabled }}
   # Authentication configuration
   PROJECT_FYR_AUTH_ENABLED: {{ .Values.auth.enabled | quote }}
@@ -58,13 +79,7 @@ data:
   {{- if .Values.auth.sso.clientId }}
   PROJECT_FYR_SSO_CLIENT_ID: {{ .Values.auth.sso.clientId | quote }}
   {{- end }}
-  {{- if .Values.auth.sso.clientSecret }}
-  PROJECT_FYR_SSO_CLIENT_SECRET: {{ .Values.auth.sso.clientSecret | quote }}
-  {{- end }}
   PROJECT_FYR_LOCAL_AUTH_ENABLED: {{ .Values.auth.local.enabled | quote }}
-  {{- if .Values.auth.local.jwtSecret }}
-  PROJECT_FYR_LOCAL_AUTH_JWT_SECRET: {{ .Values.auth.local.jwtSecret | quote }}
-  {{- end }}
   {{- if .Values.auth.local.jwtExpiryHours }}
   PROJECT_FYR_LOCAL_AUTH_JWT_EXPIRY_HOURS: {{ .Values.auth.local.jwtExpiryHours | quote }}
   {{- end }}
@@ -72,9 +87,6 @@ data:
   PROJECT_FYR_LOCAL_AUTH_SESSION_EXPIRY_HOURS: {{ .Values.auth.local.sessionExpiryHours | quote }}
   {{- end }}
   PROJECT_FYR_ADMIN_USERNAME: {{ .Values.auth.admin.username | quote }}
-  {{- if .Values.auth.admin.password }}
-  PROJECT_FYR_ADMIN_PASSWORD: {{ .Values.auth.admin.password | quote }}
-  {{- end }}
   PROJECT_FYR_ADMIN_EMAIL: {{ .Values.auth.admin.email | quote }}
   {{- if .Values.auth.excludePaths }}
   PROJECT_FYR_AUTH_EXCLUDE_PATHS: {{ .Values.auth.excludePaths | quote }}

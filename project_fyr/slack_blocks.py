@@ -587,8 +587,8 @@ def build_namespace_response(
     return blocks
 
 
-def build_help_response() -> List[Dict[str, Any]]:
-    """Build response for /fyr help command."""
+def build_help_response(slash_command: str) -> List[Dict[str, Any]]:
+    """Build response for slash-command help."""
     blocks = []
 
     blocks.append({
@@ -611,11 +611,11 @@ def build_help_response() -> List[Dict[str, Any]]:
     })
 
     commands = [
-        ("`/fyr status`", "Show cluster health summary"),
-        ("`/fyr namespace <ns>`", "Check namespace health"),
-        ("`/fyr investigate <ns> <deploy>`", "Trigger AI investigation"),
-        ("`/fyr recent`", "List recent failures (24h)"),
-        ("`/fyr help`", "Show this help message"),
+        (f"`{slash_command} status`", "Show cluster health summary"),
+        (f"`{slash_command} namespace <ns>`", "Check namespace health"),
+        (f"`{slash_command} investigate <ns> <deploy>`", "Trigger AI investigation"),
+        (f"`{slash_command} recent`", "List recent failures (24h)"),
+        (f"`{slash_command} help`", "Show this help message"),
     ]
 
     for cmd, desc in commands:

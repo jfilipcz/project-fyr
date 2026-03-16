@@ -31,6 +31,18 @@ def test_parse_namespace_annotations_bare_requestor_format():
     assert result["metadata_json"]["project-fyr.io/slack-channel"] == "#dev-notifications"
 
 
+def test_parse_namespace_annotations_metadata_annotations_requestor_format():
+    """Test that metadata.annotations.requestor annotation is recognized."""
+    annotations = {
+        "metadata.annotations.requestor": "meta@example.com",
+        "project-fyr.io/enabled": "true",
+    }
+    result = parse_namespace_annotations(annotations)
+
+    assert result["metadata_json"][ANNOTATION_REQUESTOR_EMAIL] == "meta@example.com"
+    assert result["metadata_json"]["project-fyr.io/enabled"] == "true"
+
+
 def test_parse_namespace_annotations_prefixed_takes_precedence():
     """Test that when both annotations exist, prefixed format takes precedence."""
     annotations = {

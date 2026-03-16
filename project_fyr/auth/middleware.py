@@ -109,34 +109,30 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         Tries SSO provider first, then falls back to local provider.
         """
-        print(f"[DEBUG] _validate_with_providers called with token length: {len(token)}")
-        logger.info(f"[AUTH] Attempting to validate token (length: {len(token)})")
+        logger.debug("[AUTH] Attempting token validation (length=%d)", len(token))
 
         # Try SSO provider first
         if self.sso_provider:
-            print("[DEBUG] SSO provider exists, attempting validation")
             try:
-                logger.info("[AUTH] Trying SSO provider")
+                logger.debug("[AUTH] Trying SSO provider")
                 user_info = await self.sso_provider.validate_token(token)
                 logger.info("[AUTH] SSO provider successfully validated token")
                 return user_info
-            except Exception as e:
-                print(f"[DEBUG] SSO provider failed: {type(e).__name__}: {str(e)}")
-                logger.info(f"[AUTH] SSO validation failed: {str(e)}, trying local provider")
+            except Exception as exc:
+                logger.info("[AUTH] SSO validation failed, trying local provider")
+                logger.debug("[AUTH] SSO provider rejected token with %s", type(exc).__name__)
 
         # Fall back to local provider
         if self.local_provider:
-            print("[DEBUG] Local provider exists, attempting validation")
             try:
-                logger.info("[AUTH] Trying local provider")
+                logger.debug("[AUTH] Trying local provider")
                 user_info = await self.local_provider.validate_token(token)
                 logger.info("[AUTH] Local provider successfully validated token")
                 return user_info
-            except Exception as e:
-                print(f"[DEBUG] Local provider failed: {type(e).__name__}: {str(e)}")
-                logger.warning(f"[AUTH] Local validation failed: {str(e)}", exc_info=True)
+            except Exception as exc:
+                logger.info("[AUTH] Local validation failed")
+                logger.debug("[AUTH] Local provider rejected token with %s", type(exc).__name__)
 
-        print("[DEBUG] All providers failed")
         logger.warning("[AUTH] All providers failed to validate token")
         return None
 

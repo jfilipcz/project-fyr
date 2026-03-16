@@ -23,20 +23,27 @@ from .slack_blocks import (
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_SLASH_COMMANDS = ("/fyr-ci", "/fyr-dev")
+DEFAULT_SLASH_COMMAND = SUPPORTED_SLASH_COMMANDS[0]
+
 
 def register_commands(app: App) -> None:
     """Register all slash command handlers."""
 
-    @app.command("/fyr")
     def handle_fyr_command(ack, command, respond, client):
-        """Main /fyr command router."""
+        """Main slash command router."""
         ack()  # Acknowledge immediately (3s timeout)
 
+        invoked_command = (command.get("command") or "").strip()
+        if invoked_command not in SUPPORTED_SLASH_COMMANDS:
+            invoked_command = DEFAULT_SLASH_COMMAND
         text = command.get("text", "").strip()
         user_id = command.get("user_id")
         channel_id = command.get("channel_id")
 
-        logger.info(f"Received /fyr command: '{text}' from user {user_id} in channel {channel_id}")
+        logger.info(
+            f"Received {invoked_command} command: '{text}' from user {user_id} in channel {channel_id}"
+        )
 
         # Parse subcommand
         parts = text.split()
@@ -45,29 +52,33 @@ def register_commands(app: App) -> None:
 
         try:
             if subcommand == "help" or subcommand == "":
-                handle_help(respond)
+                handle_help(respond, invoked_command)
             elif subcommand == "status":
                 handle_status(respond)
             elif subcommand == "namespace" or subcommand == "ns":
-                handle_namespace(respond, args)
+                handle_namespace(respond, args, slash_command=invoked_command)
             elif subcommand == "investigate":
-                handle_investigate(respond, client, channel_id, user_id, args)
+                handle_investigate(
+                    respond, client, channel_id, user_id, args, slash_command=invoked_command
+                )
             elif subcommand == "recent":
                 handle_recent(respond)
             else:
                 respond(
                     blocks=build_error_response(
-                        f"Unknown command: `{subcommand}`. Use `/fyr help` to see available commands."
+                        f"Unknown command: `{subcommand}`. Use `{invoked_command} help` to see available commands."
                     )
                 )
         except Exception as e:
-            logger.exception(f"Error handling /fyr {subcommand}: {e}")
+            logger.exception(f"Error handling {invoked_command} {subcommand}: {e}")
             respond(blocks=build_error_response(f"An error occurred: {str(e)}"))
 
+    for slash_command in SUPPORTED_SLASH_COMMANDS:
+        app.command(slash_command)(handle_fyr_command)
 
-def handle_help(respond) -> None:
-    """Handle /fyr help command."""
-    respond(blocks=build_help_response())
+def handle_help(respond, slash_command: str) -> None:
+    """Handle help command."""
+    respond(blocks=build_help_response(slash_command))
 
 
 def handle_status(respond) -> None:
@@ -115,10 +126,14 @@ def handle_status(respond) -> None:
         respond(blocks=build_error_response(f"Failed to get cluster status: {str(e)}"))
 
 
-def handle_namespace(respond, args: list) -> None:
-    """Handle /fyr namespace <ns> command."""
+def handle_namespace(respond, args: list, slash_command: str) -> None:
+    """Handle namespace command."""
     if not args:
-        respond(blocks=build_error_response("Please specify a namespace: `/fyr namespace <namespace-name>`"))
+        respond(
+            blocks=build_error_response(
+                f"Please specify a namespace: `{slash_command} namespace <namespace-name>`"
+            )
+        )
         return
 
     namespace = args[0]
@@ -203,12 +218,19 @@ def handle_namespace(respond, args: list) -> None:
         respond(blocks=build_error_response(f"Failed to get namespace info: {str(e)}"))
 
 
-def handle_investigate(respond, client, channel_id: str, user_id: str, args: list) -> None:
-    """Handle /fyr investigate <ns> <deployment> command."""
+def handle_investigate(
+    respond,
+    client,
+    channel_id: str,
+    user_id: str,
+    args: list,
+    slash_command: str,
+) -> None:
+    """Handle investigate command."""
     if len(args) < 1:
         respond(blocks=build_error_response(
             "Please specify namespace and optionally deployment:\n"
-            "`/fyr investigate <namespace> [deployment]`"
+            f"`{slash_command} investigate <namespace> [deployment]`"
         ))
         return
 

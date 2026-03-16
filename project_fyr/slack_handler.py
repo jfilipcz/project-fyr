@@ -26,6 +26,7 @@ from kubernetes import config as k8s_config
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+from .chat_guardrails import evaluate_chat_input_policy, redact_sensitive_output
 from .config import settings
 from .slack_commands import register_commands
 from .db import init_db, RolloutRepo
@@ -388,6 +389,26 @@ class FyrSlackHandler:
             if text.strip():
                 logger.info(f"Received message in thread: {text[:50]}...")
 
+                if settings.chat_policy_enabled:
+                    decision = evaluate_chat_input_policy(text)
+                    if not decision.allowed:
+                        logger.warning(
+                            "Blocked Slack thread request for namespace=%s deployment=%s rule=%s reason=%s",
+                            context.get("namespace") if context else None,
+                            context.get("deployment") if context else None,
+                            decision.rule_name,
+                            decision.reason,
+                        )
+                        say(
+                            thread_ts=thread_ts,
+                            text=(
+                                "I can help troubleshoot deployments and cluster behavior, "
+                                "but I can't assist with extracting or exposing secrets, "
+                                "tokens, passwords, or private keys."
+                            ),
+                        )
+                        return
+
                 say(thread_ts=thread_ts, text="🔍 Let me look into that...")
 
                 namespace = context.get("namespace") if context else None
@@ -408,8 +429,20 @@ class FyrSlackHandler:
                             is_initial_slack_investigation=False,  # Always conversational in threads
                         )
 
+                        response_text = analysis.likely_cause
+                        if settings.chat_output_redaction_enabled:
+                            response_text, redaction_count = redact_sensitive_output(response_text)
+                            if redaction_count:
+                                logger.warning(
+                                    "Redacted %s sensitive pattern(s) from Slack thread response "
+                                    "for namespace=%s deployment=%s",
+                                    redaction_count,
+                                    namespace,
+                                    deployment,
+                                )
+
                         # Always use conversational format for thread replies
-                        blocks = build_conversational_response(analysis.likely_cause)
+                        blocks = build_conversational_response(response_text)
                     else:
                         from kubernetes import client as k8s_client, config as k8s_config
                         from .namespace_analyzer import NamespaceAnalyzer
@@ -452,6 +485,16 @@ class FyrSlackHandler:
                             response_text = f"Namespace `{namespace}` looks healthy! ✅\n\n"
                             response_text += f"• {summary.get('total_deployments', 0)} deployments running\n"
                             response_text += f"• {summary.get('total_pods', 0)} pods healthy\n"
+
+                        if settings.chat_output_redaction_enabled:
+                            response_text, redaction_count = redact_sensitive_output(response_text)
+                            if redaction_count:
+                                logger.warning(
+                                    "Redacted %s sensitive pattern(s) from Slack namespace response "
+                                    "for namespace=%s",
+                                    redaction_count,
+                                    namespace,
+                                )
 
                         blocks = build_conversational_response(response_text)
 

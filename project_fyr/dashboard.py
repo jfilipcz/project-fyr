@@ -9,8 +9,10 @@ from typing import Iterator
 from project_fyr import utcnow
 import logging
 
-from .db import init_db, RolloutRepo, AlertRepo
+from .db import AlertRepo, NamespaceCaseRepo, init_db, RolloutRepo
 from .config import settings
+from .chat_guardrails import evaluate_chat_input_policy, redact_sensitive_output
+from .models import NamespaceCaseStatus
 from .webhook import router as webhook_router
 
 logger = logging.getLogger(__name__)
@@ -19,7 +21,8 @@ logger = logging.getLogger(__name__)
 insights_cache = {
     "data": None,
     "timestamp": None,
-    "hours": None
+    "hours": None,
+    "include_system": None,
 }
 
 app = FastAPI(title="Project Fyr Dashboard")
@@ -149,6 +152,20 @@ def get_repo() -> Iterator[RolloutRepo]:
 def get_alert_repo() -> Iterator[AlertRepo]:
     yield AlertRepo(_get_engine())
 
+def get_case_repo() -> Iterator[NamespaceCaseRepo]:
+    yield NamespaceCaseRepo(_get_engine())
+
+
+def _coerce_case_repo(
+    case_repo: NamespaceCaseRepo | object,
+    repo: RolloutRepo | None = None,
+) -> NamespaceCaseRepo:
+    if isinstance(case_repo, NamespaceCaseRepo):
+        return case_repo
+    if repo is not None and hasattr(repo, "_engine"):
+        return NamespaceCaseRepo(repo._engine)
+    return NamespaceCaseRepo(_get_engine())
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     """Render login page."""
@@ -169,12 +186,40 @@ async def health_check():
     return {"status": "healthy"}
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request, hours: int = 24, repo: RolloutRepo = Depends(get_repo)):
+async def index(
+    request: Request,
+    hours: int = 24,
+    repo: RolloutRepo = Depends(get_repo),
+    case_repo: NamespaceCaseRepo = Depends(get_case_repo),
+):
+    case_repo = _coerce_case_repo(case_repo, repo)
     stats = repo.get_stats(hours=hours)
+    operational_stats = repo.get_operational_stats(hours=hours)
+    case_overview = case_repo.get_case_overview_stats()
+    active_cases = [
+        row
+        for row in case_repo.list_cases(include_closed=False)
+        if row["active_issue_count"] > 0
+    ]
+    recovered_quiet_cases = [row for row in case_repo.list_cases() if row["recovered_quietly"]][:5]
+    cause_family_distribution: list[dict[str, int | str]] = []
+    cause_counts: dict[str, int] = {}
+    for row in active_cases:
+        cause_family = row["dominant_cause_family"]
+        if not cause_family:
+            continue
+        cause_counts[cause_family] = cause_counts.get(cause_family, 0) + row["active_issue_count"]
+    for cause_family, count in sorted(cause_counts.items(), key=lambda item: (-item[1], item[0])):
+        cause_family_distribution.append({"cause_family": cause_family, "count": count})
 
     return templates.TemplateResponse("overview.html", {
         "request": request,
         "stats": stats,
+        "operational_stats": operational_stats,
+        "case_overview": case_overview,
+        "active_cases": active_cases,
+        "recovered_quiet_cases": recovered_quiet_cases,
+        "cause_family_distribution": cause_family_distribution,
         "hours": hours,
         "show_ai_summary": settings.overview_show_ai_summary,
     })
@@ -188,6 +233,63 @@ async def rollouts_list(request: Request, status: str = None, namespace: str = N
         "current_namespace": namespace,
         "current_requestor": requestor,
     })
+
+
+@app.get("/cases", response_class=HTMLResponse)
+async def cases_list(
+    request: Request,
+    status: str | None = None,
+    cause_family: str | None = None,
+    case_repo: NamespaceCaseRepo = Depends(get_case_repo),
+):
+    case_repo = _coerce_case_repo(case_repo)
+    statuses = None
+    if status:
+        try:
+            statuses = [NamespaceCaseStatus[status.upper()]]
+        except KeyError:
+            statuses = None
+    case_rows = case_repo.list_cases(
+        statuses=statuses,
+        cause_family=cause_family or None,
+    )
+    return templates.TemplateResponse(
+        "cases.html",
+        {
+            "request": request,
+            "case_rows": case_rows,
+            "current_status": status,
+            "current_cause_family": cause_family,
+        },
+    )
+
+
+@app.get("/case/{case_id}", response_class=HTMLResponse)
+async def case_detail(
+    request: Request,
+    case_id: int,
+    case_repo: NamespaceCaseRepo = Depends(get_case_repo),
+):
+    case_repo = _coerce_case_repo(case_repo)
+    payload = case_repo.get_case_detail(case_id)
+    if not payload["case"]:
+        raise HTTPException(status_code=404, detail="Namespace case not found")
+    recovered_before_notification = any(
+        (issue.metadata_json or {}).get("recovered_before_notification") is True
+        for issue in payload["resolved_issues"]
+    )
+    return templates.TemplateResponse(
+        "namespace_case.html",
+        {
+            "request": request,
+            "case": payload["case"],
+            "active_issues": payload["active_issues"],
+            "resolved_issues": payload["resolved_issues"],
+            "observations": payload["observations"],
+            "linked_rollouts": payload["linked_rollouts"],
+            "recovered_before_notification": recovered_before_notification,
+        },
+    )
 
 @app.get("/api/rollouts")
 async def get_rollouts_data(
@@ -227,7 +329,13 @@ async def get_rollouts_data(
     }
 
 @app.get("/rollout/{rollout_id}", response_class=HTMLResponse)
-async def detail(request: Request, rollout_id: int, repo: RolloutRepo = Depends(get_repo)):
+async def detail(
+    request: Request,
+    rollout_id: int,
+    repo: RolloutRepo = Depends(get_repo),
+    case_repo: NamespaceCaseRepo = Depends(get_case_repo),
+):
+    case_repo = _coerce_case_repo(case_repo, repo)
     rollout = repo.get_by_id(rollout_id)
     if not rollout:
         raise HTTPException(status_code=404, detail="Rollout not found")
@@ -246,7 +354,19 @@ async def detail(request: Request, rollout_id: int, repo: RolloutRepo = Depends(
             # analysis is stored as a dict, Jinja2 can access it
             analysis_data = record.analysis
 
-    return templates.TemplateResponse("detail.html", {"request": request, "rollout": rollout, "analysis": analysis_data, "annotation_prefix": settings.annotation_prefix})
+    parent_case = case_repo.get_parent_case_for_rollout(rollout.id)
+
+    return templates.TemplateResponse(
+        "detail.html",
+        {
+            "request": request,
+            "rollout": rollout,
+            "analysis": analysis_data,
+            "annotation_prefix": settings.annotation_prefix,
+            "parent_case": parent_case["case"] if parent_case else None,
+            "parent_issue": parent_case["issue"] if parent_case else None,
+        },
+    )
 
 @app.post("/api/investigate")
 async def investigate(request: Request):
@@ -387,7 +507,7 @@ async def analyze_namespace(namespace: str):
 
 
 @app.post("/api/investigate/chat")
-async def chat_with_agent(request: dict):
+async def chat_with_agent(payload: dict):
     """
     Interactive chat with the K8s investigation agent.
 
@@ -407,15 +527,42 @@ async def chat_with_agent(request: dict):
     from kubernetes import config
     from .agent import InvestigatorAgent
 
-    namespace = request.get("namespace")
-    deployment = request.get("deployment")
-    messages = request.get("messages", [])
+    namespace = payload.get("namespace")
+    deployment = payload.get("deployment")
+    messages = payload.get("messages", [])
 
     if not namespace:
         raise HTTPException(status_code=400, detail="namespace is required")
 
     if not messages or not messages[-1].get("content"):
         raise HTTPException(status_code=400, detail="messages with content required")
+
+    user_messages = []
+    for msg in messages:
+        role = str(msg.get("role", "user")).lower()
+        content = str(msg.get("content", "")).strip()
+        if role == "user" and content:
+            user_messages.append(content)
+    if not user_messages:
+        raise HTTPException(status_code=400, detail="at least one user message with content is required")
+
+    if settings.chat_policy_enabled:
+        decision = evaluate_chat_input_policy(user_messages[-1])
+        if not decision.allowed:
+            logger.warning(
+                "Blocked chat request for namespace=%s deployment=%s rule=%s reason=%s",
+                namespace,
+                deployment,
+                decision.rule_name,
+                decision.reason,
+            )
+            return {
+                "response": (
+                    "I can help troubleshoot deployments and cluster behavior, but I can't assist with extracting "
+                    "or exposing secrets, tokens, passwords, or private keys."
+                ),
+                "status": "blocked",
+            }
 
     logger.info(f"Chat request for namespace: {namespace}, deployment: {deployment}")
 
@@ -473,9 +620,13 @@ async def chat_with_agent(request: dict):
 
     # Add all conversation messages
     for msg in messages:
+        role = str(msg.get("role", "user")).lower()
+        content = str(msg.get("content", "")).strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
         formatted_messages.append({
-            "role": msg.get("role", "user"),
-            "content": msg.get("content", "")
+            "role": role,
+            "content": content,
         })
 
     # Invoke agent with conversation history
@@ -488,6 +639,16 @@ async def chat_with_agent(request: dict):
         if result_messages:
             last_message = result_messages[-1]
             response_text = last_message.content if hasattr(last_message, 'content') else str(last_message)
+
+            if settings.chat_output_redaction_enabled:
+                response_text, redaction_count = redact_sensitive_output(response_text)
+                if redaction_count:
+                    logger.warning(
+                        "Redacted %s sensitive pattern(s) from chat response for namespace=%s deployment=%s",
+                        redaction_count,
+                        namespace,
+                        deployment,
+                    )
 
             # Count iterations for logging
             iteration_count = sum(1 for msg in result_messages if hasattr(msg, 'type') and msg.type == 'ai')
@@ -556,10 +717,12 @@ async def overview_legacy(request: Request, hours: int = 24, include_system: boo
     """Legacy route - redirects to main page"""
     exclude_system = not include_system
     stats = repo.get_stats(hours=hours, exclude_system=exclude_system)
+    operational_stats = repo.get_operational_stats(hours=hours, exclude_system=exclude_system)
 
     return templates.TemplateResponse("overview.html", {
         "request": request,
         "stats": stats,
+        "operational_stats": operational_stats,
         "hours": hours
     })
 
@@ -570,6 +733,7 @@ async def get_overview_insights(hours: int = 24, include_system: bool = False, r
     from .aggregator import IssueAggregator
 
     exclude_system = not include_system
+    cache_cluster = f"{settings.k8s_cluster_name}:{'all' if include_system else 'filtered'}"
 
     # Check cache
     now = utcnow()
@@ -577,12 +741,26 @@ async def get_overview_insights(hours: int = 24, include_system: bool = False, r
         insights_cache["data"] is not None and
         insights_cache["timestamp"] is not None and
         insights_cache["hours"] == hours and
+        insights_cache["include_system"] == include_system and
         (now - insights_cache["timestamp"]).total_seconds() < settings.insights_cache_ttl_minutes * 60
     )
 
     if cache_valid:
         logger.debug(f"Returning cached insights (age: {(now - insights_cache['timestamp']).total_seconds():.0f}s)")
         return insights_cache["data"]
+
+    cached = repo.get_cached_insights(
+        cluster=cache_cluster,
+        hours=hours,
+        ttl_minutes=settings.insights_cache_ttl_minutes,
+    )
+    if cached:
+        insights_cache["data"] = cached.insights
+        insights_cache["timestamp"] = cached.generated_at
+        insights_cache["hours"] = hours
+        insights_cache["include_system"] = include_system
+        logger.debug("Returning DB-cached insights")
+        return cached.insights
 
     # Get recent failures with analysis
     failures = repo.get_recent_failures(limit=50, hours=hours, exclude_system=exclude_system)
@@ -606,6 +784,65 @@ async def get_overview_insights(hours: int = 24, include_system: bool = False, r
     insights_cache["data"] = result
     insights_cache["timestamp"] = now
     insights_cache["hours"] = hours
+    insights_cache["include_system"] = include_system
+    repo.save_cached_insights(
+        cluster=cache_cluster,
+        hours=hours,
+        insights=result,
+        failure_count=len(failures),
+    )
     logger.info(f"Cached new insights for {hours}h window")
 
     return result
+
+
+@app.get("/api/overview/namespace-analysis")
+async def get_namespace_analysis_details(
+    namespace: str | None = None,
+    hours: int = 24,
+    include_system: bool = False,
+    repo: RolloutRepo = Depends(get_repo),
+):
+    """Return stored rollout analyses for a namespace in the selected time window."""
+    if not namespace:
+        raise HTTPException(status_code=400, detail="namespace is required")
+
+    exclude_system = not include_system
+    failures = repo.get_namespace_recent_failures(
+        namespace=namespace,
+        hours=hours,
+        limit=50,
+        exclude_system=exclude_system,
+    )
+
+    formatted_failures: list[dict] = []
+    for rollout, analysis in failures:
+        analysis_payload = analysis.analysis if analysis and analysis.analysis else {}
+        recommended_steps = analysis_payload.get("recommended_steps") or []
+        if not isinstance(recommended_steps, list):
+            recommended_steps = [str(recommended_steps)]
+
+        formatted_failures.append(
+            {
+                "rollout_id": rollout.id,
+                "deployment": rollout.deployment,
+                "generation": rollout.generation,
+                "cluster": rollout.cluster,
+                "status": rollout.status.value if hasattr(rollout.status, "value") else str(rollout.status),
+                "started_at": rollout.started_at.isoformat() if rollout.started_at else None,
+                "summary": analysis_payload.get("summary") or "",
+                "likely_cause": analysis_payload.get("likely_cause") or "",
+                "severity": analysis_payload.get("severity") or "unknown",
+                "details": analysis_payload.get("details") or "",
+                "triage_team": analysis_payload.get("triage_team") or "",
+                "triage_reason": analysis_payload.get("triage_reason") or "",
+                "recommended_steps": [str(step) for step in recommended_steps],
+            }
+        )
+
+    return {
+        "namespace": namespace,
+        "hours": hours,
+        "count": len(formatted_failures),
+        "failures": formatted_failures,
+    }

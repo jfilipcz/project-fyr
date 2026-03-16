@@ -36,9 +36,7 @@ spec:
             - configMapRef:
                 name: {{ include "project-fyr.fullname" . }}
             - secretRef:
-                name: project-fyr-secrets
-            - secretRef:
-                name: fyr-slack-secrets
+                name: {{ include "project-fyr.inlineSecretName" . }}
             {{- if .Values.secrets.existingSecret }}
             - secretRef:
                 name: {{ .Values.secrets.existingSecret }}

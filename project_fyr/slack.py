@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import time
 import threading
 from typing import Literal
@@ -16,6 +17,7 @@ from .models import Analysis
 
 SlackTargetKind = Literal["dm", "channel"]
 _CACHE_MISS = object()
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -114,7 +116,11 @@ def _extract_requestor_email(metadata: dict | None) -> str | None:
         return email
     annotations = metadata.get("namespace_annotations") or metadata.get("metadata_json") or {}
     from .config import settings as _settings
-    return annotations.get(f"{_settings.annotation_prefix}/requestor-email")
+    return (
+        annotations.get(f"{_settings.annotation_prefix}/requestor-email")
+        or annotations.get("requestor")
+        or annotations.get("metadata.annotations.requestor")
+    )
 
 
 def _extract_owner_channel(metadata: dict | None) -> str | None:
@@ -369,7 +375,12 @@ class SlackNotifier:
                 self._client.chat_postMessage(channel=channel, blocks=payload)
                 return True
             except SlackApiError as exc:
-                print(f"failed to post slack message (attempt {attempts}/{max_attempts}): {exc}")
+                logger.warning(
+                    "Failed to post Slack message on attempt %s/%s: %s",
+                    attempts,
+                    max_attempts,
+                    exc,
+                )
                 if attempts >= max_attempts:
                     break
                 time.sleep(1)

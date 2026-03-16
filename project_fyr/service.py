@@ -18,14 +18,118 @@ from kubernetes.client.rest import ApiException
 from kubernetes.config.config_exception import ConfigException
 
 from .agent import InvestigatorAgent
+from .cases import CaseIngestionService
 from .config import Settings, settings
-from .db import RolloutRepo, AlertRepo, init_db
-from .models import NotifyStatus, ReducedContext, RolloutStatus
+from .db import AlertRepo, NamespaceCaseRepo, RolloutRepo, WorkItemRepo, init_db
+from .issue_classifier import classify_issue_signal
+from .models import (
+    Analysis,
+    IssueScope,
+    IssueStatus,
+    NamespaceCaseStatus,
+    NotifyStatus,
+    ReducedContext,
+    RolloutStatus,
+    WorkItemKind,
+    WorkItemStatus,
+)
 from .slack import SlackNotifier
 from .triage import triage_failure
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RolloutNotificationDecision:
+    classification: str
+    notify_immediately: bool
+    reason: str
+
+
+def _normalized_strings(values: list[Any] | None) -> list[str]:
+    if not values:
+        return []
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip().lower()
+        if text:
+            result.append(text)
+    return result
+
+
+def classify_rollout_notification_decision(
+    *,
+    trigger_context: dict[str, Any] | None,
+    analysis,
+    config: Settings,
+) -> RolloutNotificationDecision:
+    trigger_context = trigger_context or {}
+    failure_type = str(trigger_context.get("failure_type") or "").strip().lower()
+    observed_failures = _normalized_strings(trigger_context.get("observed_failures"))
+    transient_types = {item.lower() for item in config.rollout_transient_failure_types}
+    immediate_types = {item.lower() for item in config.rollout_immediate_actionable_failure_types}
+    patterns = [item.lower() for item in config.rollout_transient_observation_patterns]
+    mode = str(getattr(config, "rollout_transient_classification_mode", "hybrid")).strip().lower()
+
+    haystack_parts = observed_failures + _normalized_strings(
+        [
+            failure_type,
+            getattr(analysis, "summary", ""),
+            getattr(analysis, "likely_cause", ""),
+            *getattr(analysis, "recommended_steps", []),
+        ]
+    )
+    haystack = "\n".join(haystack_parts)
+
+    if failure_type and failure_type in immediate_types:
+        return RolloutNotificationDecision(
+            classification="immediate_actionable",
+            notify_immediately=True,
+            reason=f"failure_type '{failure_type}' configured as immediate actionable",
+        )
+
+    pattern_match = next((pattern for pattern in patterns if pattern and pattern in haystack), None)
+    transient_match = bool(failure_type and failure_type in transient_types) or pattern_match is not None
+
+    if mode in {"allowlist", "hybrid"} and transient_match:
+        if failure_type and failure_type in transient_types:
+            reason = f"failure_type '{failure_type}' matched transient allowlist"
+        else:
+            reason = f"transient observation pattern '{pattern_match}' matched rollout evidence"
+        return RolloutNotificationDecision(
+            classification="transient",
+            notify_immediately=False,
+            reason=reason,
+        )
+
+    return RolloutNotificationDecision(
+        classification="unknown",
+        notify_immediately=False,
+        reason="no immediate-actionable or transient classification matched",
+    )
+
+
+def is_transient_rollout_candidate(
+    *,
+    trigger_context: dict[str, Any] | None,
+    config: Settings,
+) -> tuple[bool, str]:
+    trigger_context = trigger_context or {}
+    failure_type = str(trigger_context.get("failure_type") or "").strip().lower()
+    observed_failures = _normalized_strings(trigger_context.get("observed_failures"))
+    transient_types = {item.lower() for item in config.rollout_transient_failure_types}
+    patterns = [item.lower() for item in config.rollout_transient_observation_patterns]
+    haystack = "\n".join(_normalized_strings([failure_type, *observed_failures]))
+
+    if failure_type and failure_type in transient_types:
+        return True, f"failure_type '{failure_type}' matched transient allowlist"
+
+    pattern_match = next((pattern for pattern in patterns if pattern and pattern in haystack), None)
+    if pattern_match:
+        return True, f"trigger observation matched transient pattern '{pattern_match}'"
+
+    return False, "no transient candidate match"
 
 
 class AlertBatcher:
@@ -112,6 +216,15 @@ class AnalysisWorker:
         # Initialize k8s API clients for pre-checks
         self._apps_v1 = client.AppsV1Api()
         self._core_v1 = client.CoreV1Api()
+        self._case_repo = NamespaceCaseRepo(repo._engine)
+        self._work_item_repo = WorkItemRepo(repo._engine)
+
+    def _ensure_case_repos(self) -> None:
+        engine = getattr(self._repo, "_engine", None)
+        if getattr(self, "_case_repo", None) is None and engine is not None:
+            self._case_repo = NamespaceCaseRepo(engine)
+        if getattr(self, "_work_item_repo", None) is None and engine is not None:
+            self._work_item_repo = WorkItemRepo(engine)
 
     def _get_namespace_annotations(self, namespace: str) -> dict[str, str]:
         try:
@@ -137,8 +250,7 @@ class AnalysisWorker:
         namespace_channel: str | None = None,
     ) -> dict[str, Any]:
         annotations = self._get_namespace_annotations(namespace)
-        # Support both annotation styles: <prefix>/requestor-email and bare 'requestor'
-        requestor_email = annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_BARE)
+        requestor_email = extract_requestor_email_from_annotations(annotations)
         resolved_namespace_channel = namespace_channel or annotations.get(ANNOTATION_SLACK_CHANNEL)
 
         owner_channel = None
@@ -256,16 +368,299 @@ class AnalysisWorker:
 
     def loop(self):
         while True:
+            # 0. Process new issue-based control plane work.
+            try:
+                self._process_issue_work_items()
+            except Exception as exc:
+                logger.error(f"issue processing loop error: {exc}")
+
+            try:
+                self._process_case_recheck_work_items()
+            except Exception as exc:
+                logger.error(f"case recheck loop error: {exc}")
+
             # 1. Process Rollouts (Legacy/Existing path)
-            self._process_rollouts()
+            try:
+                self._process_rollouts()
+            except Exception as exc:
+                logger.error(f"rollout processing loop error: {exc}")
+
+            # 1b. Re-evaluate rollout notifications deferred for noise reduction.
+            try:
+                self._process_deferred_rollout_notifications()
+            except Exception as exc:
+                logger.error(f"deferred rollout notification loop error: {exc}")
 
             # 2. Process Alert Jobs
-            self._process_alert_jobs()
+            try:
+                self._process_alert_jobs()
+            except Exception as exc:
+                logger.error(f"alert processing loop error: {exc}")
 
             # 3. Process Namespace Investigation Jobs
-            self._process_namespace_jobs()
+            try:
+                self._process_namespace_jobs()
+            except Exception as exc:
+                logger.error(f"namespace processing loop error: {exc}")
 
             time.sleep(15)
+
+    def _process_issue_work_items(self):
+        self._ensure_case_repos()
+        work_repo = getattr(self, "_work_item_repo", None)
+        case_repo = getattr(self, "_case_repo", None)
+        if work_repo is None or case_repo is None:
+            return
+
+        work_item = work_repo.claim_work_item(WorkItemKind.ISSUE_INVESTIGATION)
+        if work_item is None:
+            return
+        if work_item.issue_id is None:
+            work_repo.update_work_item_status(
+                work_item.id,
+                WorkItemStatus.FAILED,
+                error="issue investigation work item missing issue_id",
+            )
+            return
+
+        issue = case_repo.get_issue_by_id(work_item.issue_id)
+        if issue is None:
+            work_repo.update_work_item_status(
+                work_item.id,
+                WorkItemStatus.FAILED,
+                error=f"issue {work_item.issue_id} not found",
+            )
+            return
+
+        case_repo.update_issue_status(issue.id, IssueStatus.INVESTIGATING)
+        try:
+            self._investigate_issue(issue)
+        except Exception as exc:
+            logger.error(f"issue investigation failed for issue {issue.id}: {exc}")
+            work_repo.update_work_item_status(
+                work_item.id,
+                WorkItemStatus.FAILED,
+                error=str(exc),
+            )
+            return
+
+        work_repo.update_work_item_status(work_item.id, WorkItemStatus.COMPLETED)
+
+    def _process_case_recheck_work_items(self):
+        self._ensure_case_repos()
+        work_repo = getattr(self, "_work_item_repo", None)
+        case_repo = getattr(self, "_case_repo", None)
+        if work_repo is None or case_repo is None:
+            return
+
+        work_item = work_repo.claim_work_item(WorkItemKind.CASE_RECHECK)
+        if work_item is None:
+            return
+        if work_item.namespace_case_id is None:
+            work_repo.update_work_item_status(
+                work_item.id,
+                WorkItemStatus.FAILED,
+                error="case recheck work item missing namespace_case_id",
+            )
+            return
+
+        case_record = case_repo.get_case_by_id(work_item.namespace_case_id)
+        if case_record is None:
+            work_repo.update_work_item_status(
+                work_item.id,
+                WorkItemStatus.FAILED,
+                error=f"namespace case {work_item.namespace_case_id} not found",
+            )
+            return
+
+        try:
+            self._recheck_case(case_record.id)
+        except Exception as exc:
+            logger.error(f"case recheck failed for case {case_record.id}: {exc}")
+            work_repo.update_work_item_status(
+                work_item.id,
+                WorkItemStatus.FAILED,
+                error=str(exc),
+            )
+            return
+
+        work_repo.update_work_item_status(work_item.id, WorkItemStatus.COMPLETED)
+
+    def _recheck_case(self, case_id: int) -> None:
+        self._ensure_case_repos()
+        case_repo = self._case_repo
+        case_record = case_repo.get_case_by_id(case_id)
+        if case_record is None or case_record.status == NamespaceCaseStatus.CLOSED:
+            return
+
+        all_issues = case_repo.list_case_issues(case_id)
+        active_deployment_issues = [
+            issue for issue in all_issues
+            if issue.scope == IssueScope.DEPLOYMENT
+            and issue.status in {IssueStatus.ACTIVE, IssueStatus.INVESTIGATING}
+        ]
+
+        grouped_by_cause: dict[str, list[Any]] = {}
+        for issue in active_deployment_issues:
+            grouped_by_cause.setdefault(issue.cause_family, []).append(issue)
+
+        for cause_family, related in grouped_by_cause.items():
+            if len(related) < 3:
+                continue
+            case_repo.get_or_create_issue(
+                namespace_case_id=case_id,
+                scope=IssueScope.NAMESPACE,
+                resource_kind="Namespace",
+                resource_name=case_record.namespace,
+                cause_family=cause_family,
+                issue_type="correlated_namespace_issue",
+                status=IssueStatus.ACTIVE,
+                metadata_json={
+                    "synthesized": True,
+                    "child_issue_ids": [issue.id for issue in related],
+                },
+            )
+
+        refreshed_issues = case_repo.list_case_issues(case_id)
+        for issue in refreshed_issues:
+            if issue.scope != IssueScope.NAMESPACE:
+                continue
+            metadata = dict(issue.metadata_json or {})
+            if not metadata.get("synthesized"):
+                continue
+            related = grouped_by_cause.get(issue.cause_family, [])
+            if len(related) >= 3:
+                continue
+            if issue.status not in {IssueStatus.ACTIVE, IssueStatus.INVESTIGATING}:
+                continue
+            case_repo.update_issue_status(
+                issue.id,
+                IssueStatus.RESOLVED,
+                metadata_json={"resolution_reason": "correlated child issue pattern cleared"},
+            )
+
+        active_issues = case_repo.list_active_issues(case_id)
+        if active_issues:
+            if case_record.status != NamespaceCaseStatus.OPEN:
+                case_repo.update_case_status(case_id, NamespaceCaseStatus.OPEN)
+            return
+
+        if case_record.status == NamespaceCaseStatus.OPEN:
+            case_repo.update_case_status(case_id, NamespaceCaseStatus.QUIETING)
+            return
+
+        quiet_seconds = int(getattr(self._config, "namespace_case_auto_close_seconds", 900))
+        if case_record.status == NamespaceCaseStatus.QUIETING:
+            quieting_at = case_record.quieting_at or utcnow()
+            if (utcnow() - quieting_at).total_seconds() >= quiet_seconds:
+                case_repo.update_case_status(case_id, NamespaceCaseStatus.CLOSED)
+
+    def _investigate_issue(self, issue) -> None:
+        self._ensure_case_repos()
+        case_repo = self._case_repo
+        work_repo = self._work_item_repo
+
+        if issue.scope == IssueScope.DEPLOYMENT:
+            rollout = self._repo.get_by_id(issue.rollout_id) if issue.rollout_id else None
+            if rollout is None:
+                case_repo.update_issue_status(
+                    issue.id,
+                    IssueStatus.SUPPRESSED,
+                    metadata_json={"resolution_reason": "missing rollout for deployment issue"},
+                )
+                work_repo.enqueue_work_item(
+                    kind=WorkItemKind.CASE_RECHECK,
+                    namespace_case_id=issue.namespace_case_id,
+                )
+                return
+
+            if self._is_deployment_healthy_now(rollout.deployment, rollout.namespace):
+                case_repo.update_issue_status(
+                    issue.id,
+                    IssueStatus.RESOLVED,
+                    metadata_json={"resolution_reason": "deployment recovered before issue investigation"},
+                )
+                work_repo.enqueue_work_item(
+                    kind=WorkItemKind.CASE_RECHECK,
+                    namespace_case_id=issue.namespace_case_id,
+                )
+                return
+
+            trigger_context = (rollout.metadata_json or {}).get("trigger_context") or {}
+            analysis = self._agent.investigate(
+                rollout.deployment,
+                rollout.namespace,
+                trigger_context=trigger_context,
+            )
+            classification = classify_issue_signal(
+                signal_type=str((issue.metadata_json or {}).get("trigger_reason") or "issue_investigation"),
+                trigger_context=trigger_context,
+                analysis_text="\n".join(
+                    [
+                        analysis.summary,
+                        analysis.likely_cause,
+                        *analysis.recommended_steps,
+                    ]
+                ),
+            )
+            refreshed_issue = case_repo.get_or_create_issue(
+                namespace_case_id=issue.namespace_case_id,
+                scope=issue.scope,
+                resource_kind=issue.resource_kind,
+                resource_name=issue.resource_name,
+                rollout_id=issue.rollout_id,
+                cause_family=classification.cause_family,
+                issue_type=classification.issue_type,
+                status=IssueStatus.ACTIVE,
+                metadata_json={
+                    "analysis_summary": analysis.summary,
+                    "classification_reasons": classification.reasons,
+                    "dependency_target": classification.dependency_target,
+                },
+            )
+            case_repo.append_issue_analysis(
+                refreshed_issue.id,
+                analysis=analysis,
+                model_name=self._config.langchain_model_name,
+            )
+            case_repo.update_issue_status(refreshed_issue.id, IssueStatus.ACTIVE)
+            work_repo.enqueue_work_item(
+                kind=WorkItemKind.CASE_RECHECK,
+                namespace_case_id=issue.namespace_case_id,
+            )
+            return
+
+        metadata = dict(issue.metadata_json or {})
+        if issue.issue_type == "terminating_stuck":
+            likely_cause = "Namespace has remained in Terminating state past the configured threshold."
+            steps = [
+                "Inspect namespace finalizers and remaining namespaced resources.",
+                "Check for API objects blocked on finalizer cleanup.",
+            ]
+        else:
+            likely_cause = f"Namespace-level issue '{issue.issue_type}' remains active."
+            steps = ["Inspect namespace events and dependent resources."]
+        analysis = Analysis(
+            summary=f"Namespace issue detected for {issue.resource_name}",
+            likely_cause=likely_cause,
+            recommended_steps=steps,
+            severity="medium",
+        )
+        case_repo.append_issue_analysis(
+            issue.id,
+            analysis=analysis,
+            model_name=self._config.langchain_model_name,
+            reduced_context={
+                "namespace": issue.resource_name,
+                "issue_type": issue.issue_type,
+                "metadata": metadata,
+            },
+        )
+        case_repo.update_issue_status(issue.id, IssueStatus.ACTIVE)
+        work_repo.enqueue_work_item(
+            kind=WorkItemKind.CASE_RECHECK,
+            namespace_case_id=issue.namespace_case_id,
+        )
 
     def _process_rollouts(self):
         rollouts = self._repo.list_failed(self._cluster)
@@ -277,13 +672,19 @@ class AnalysisWorker:
         unique_namespaces = {r.namespace for r in rollouts}
         existing_namespaces = set()
         deleted_namespaces = set()
+        terminating_namespaces = set()
         
         logger.debug(f"Checking {len(unique_namespaces)} unique namespaces for {len(rollouts)} pending rollouts")
         
         for ns in unique_namespaces:
             try:
-                self._core_v1.read_namespace(ns)
-                existing_namespaces.add(ns)
+                namespace_obj = self._core_v1.read_namespace(ns)
+                ns_phase = getattr(getattr(namespace_obj, "status", None), "phase", None)
+                if ns_phase == "Terminating":
+                    terminating_namespaces.add(ns)
+                    logger.info(f"Namespace {ns} is terminating")
+                else:
+                    existing_namespaces.add(ns)
             except ApiException as e:
                 if e.status == 404:
                     deleted_namespaces.add(ns)
@@ -294,17 +695,22 @@ class AnalysisWorker:
                     logger.warning(f"Error checking namespace {ns}: {e}")
                     existing_namespaces.add(ns)
         
-        # Batch discard all rollouts from deleted namespaces
-        if deleted_namespaces:
-            rollouts_to_discard = [r for r in rollouts if r.namespace in deleted_namespaces]
+        # Batch discard all rollouts from deleted/terminating namespaces
+        namespaces_to_discard = deleted_namespaces | terminating_namespaces
+        if namespaces_to_discard:
+            rollouts_to_discard = [r for r in rollouts if r.namespace in namespaces_to_discard]
             logger.info(
-                f"Discarding {len(rollouts_to_discard)} rollouts from {len(deleted_namespaces)} deleted namespaces"
+                f"Discarding {len(rollouts_to_discard)} rollouts from {len(namespaces_to_discard)} deleted/terminating namespaces"
             )
             for rollout in rollouts_to_discard:
                 try:
+                    if rollout.namespace in terminating_namespaces:
+                        reason = "Namespace terminating (ephemeral CI environment)"
+                    else:
+                        reason = "Namespace deleted (ephemeral CI environment)"
                     self._repo.discard_analysis(
                         rollout.id,
-                        reason="Namespace deleted (ephemeral CI environment)",
+                        reason=reason,
                     )
                 except Exception as exc:
                     logger.error(f"Error discarding rollout {rollout.id}: {exc}")
@@ -312,20 +718,151 @@ class AnalysisWorker:
         # Process remaining rollouts from existing namespaces
         rollouts_to_process = [r for r in rollouts if r.namespace in existing_namespaces]
         logger.info(f"Processing {len(rollouts_to_process)} rollouts from existing namespaces")
+        cfg = getattr(self, "_config", settings)
+        grace_seconds = max(
+            0,
+            int(getattr(cfg, "analysis_healthy_recheck_delay_seconds", 90)),
+        )
+        grace_window = timedelta(seconds=grace_seconds)
+        transient_window_seconds = max(
+            0,
+            int(getattr(cfg, "rollout_transient_persistence_window_seconds", 300)),
+        )
+        transient_window = timedelta(seconds=transient_window_seconds)
+        investigation_mode = str(
+            getattr(cfg, "rollout_transient_investigation_mode", "immediate")
+        ).strip().lower()
         
         for rollout in rollouts_to_process:
             try:
-                # Pre-check is still useful for logging, but failed rollouts must be analyzed.
-                if self._is_deployment_healthy_now(rollout.deployment, rollout.namespace):
-                    logger.info(
-                        f"Pre-check: {rollout.namespace}/{rollout.deployment} appears healthy, "
-                        "but rollout is FAILED - proceeding with investigation"
+                trigger_context = (rollout.metadata_json or {}).get("trigger_context") or {}
+
+                # Namespace may disappear between batch pre-check and per-rollout processing.
+                try:
+                    namespace_obj = self._core_v1.read_namespace(rollout.namespace)
+                    ns_phase = getattr(getattr(namespace_obj, "status", None), "phase", None)
+                    if ns_phase == "Terminating":
+                        reason = "Namespace terminating before analysis could run (ephemeral CI environment)"
+                        logger.info(
+                            f"Discarding rollout {rollout.id} for terminating namespace {rollout.namespace}"
+                        )
+                        self._repo.discard_analysis(rollout.id, reason=reason)
+                        continue
+                except ApiException as exc:
+                    if exc.status == 404:
+                        reason = "Namespace deleted before analysis could run (ephemeral CI environment)"
+                        logger.info(
+                            f"Discarding rollout {rollout.id} for deleted namespace {rollout.namespace}"
+                        )
+                        self._repo.discard_analysis(rollout.id, reason=reason)
+                        continue
+                    logger.warning(
+                        f"Error re-checking namespace {rollout.namespace} before analysis: {exc}"
                     )
+
+                # For transient failures, cluster state may have already recovered by analysis time.
+                if self._is_deployment_healthy_now(rollout.deployment, rollout.namespace):
+                    reference_time = rollout.failed_at or rollout.started_at
+                    if reference_time is not None:
+                        age = utcnow() - reference_time
+                        if age < grace_window:
+                            remaining = int((grace_window - age).total_seconds())
+                            logger.info(
+                                f"Pre-check: {rollout.namespace}/{rollout.deployment} is healthy "
+                                f"within grace window ({int(age.total_seconds())}s/{grace_seconds}s), "
+                                f"deferring analysis for rollout {rollout.id} (~{remaining}s remaining)"
+                            )
+                            continue
+                        reason = (
+                            "Recovered before analysis "
+                            f"(healthy at pre-check {int(age.total_seconds())}s after failure; "
+                            f"grace={grace_seconds}s)"
+                        )
+                    else:
+                        reason = (
+                            "Recovered before analysis (healthy at pre-check; "
+                            "failure timestamp unavailable)"
+                        )
+                    logger.info(
+                        f"Discarding rollout {rollout.id} for recovered deployment "
+                        f"{rollout.namespace}/{rollout.deployment}: {reason}"
+                    )
+                    self._repo.discard_analysis(rollout.id, reason=reason)
+                    continue
+
+                if investigation_mode == "delayed":
+                    transient_candidate, candidate_reason = is_transient_rollout_candidate(
+                        trigger_context=trigger_context,
+                        config=cfg,
+                    )
+                    if transient_candidate:
+                        reference_time = rollout.failed_at or rollout.started_at
+                        if reference_time is not None:
+                            candidate_age = utcnow() - reference_time
+                            if candidate_age < transient_window:
+                                remaining = int((transient_window - candidate_age).total_seconds())
+                                logger.info(
+                                    f"Deferring investigation for transient rollout candidate "
+                                    f"{rollout.namespace}/{rollout.deployment} ({candidate_reason}); "
+                                    f"{remaining}s remaining in quiet window"
+                                )
+                                continue
 
                 logger.info(f"Starting investigation for rollout {rollout.namespace}/{rollout.deployment}")
                 self._investigate_rollout(rollout)
             except Exception as exc:
                 logger.error(f"rollout analysis error: {exc}")
+
+    def _rollout_notification_policy(self) -> dict[str, Any]:
+        return {
+            "classification_mode": self._config.rollout_transient_classification_mode,
+            "investigation_mode": self._config.rollout_transient_investigation_mode,
+            "slack_mode": self._config.rollout_transient_slack_mode,
+            "persistence_window_seconds": self._config.rollout_transient_persistence_window_seconds,
+            "transient_failure_types": list(self._config.rollout_transient_failure_types),
+            "transient_observation_patterns": list(self._config.rollout_transient_observation_patterns),
+            "immediate_actionable_failure_types": list(self._config.rollout_immediate_actionable_failure_types),
+        }
+
+    def _build_rollout_notification_metadata(
+        self,
+        rollout,
+        analysis: Analysis,
+    ) -> tuple[dict[str, Any], str]:
+        metadata = rollout_metadata_dict(rollout)
+        metadata.update(
+            {
+                "cluster": self._config.k8s_cluster_name,
+                "namespace": rollout.namespace,
+                "deployment": rollout.deployment,
+                "triage_team": analysis.triage_team,
+                "triage_reason": analysis.triage_reason,
+            }
+        )
+        metadata.update(
+            self._build_slack_routing_metadata(
+                namespace=rollout.namespace,
+                deployment=rollout.deployment,
+                namespace_channel=rollout.slack_channel,
+            )
+        )
+        rollout_ref = f"{rollout.namespace}/{rollout.deployment}#{rollout.generation}"
+        return metadata, rollout_ref
+
+    def _send_rollout_analysis_notification(
+        self,
+        rollout,
+        analysis: Analysis,
+        metadata: dict[str, Any],
+        rollout_ref: str,
+    ) -> bool:
+        return self._slack.send_analysis(
+            channel=rollout.slack_channel,
+            rollout_ref=rollout_ref,
+            analysis=analysis,
+            metadata=metadata,
+            rollout_id=rollout.id,
+        )
 
     def _investigate_rollout(self, rollout):
         # Extract trigger context from rollout metadata for investigation enrichment
@@ -357,40 +894,6 @@ class AnalysisWorker:
         analysis.triage_team = triage.team
         analysis.triage_reason = triage.reason
 
-        metadata = rollout_metadata_dict(rollout)
-        metadata.update(
-            {
-                "cluster": self._config.k8s_cluster_name,
-                "namespace": rollout.namespace,
-                "deployment": rollout.deployment,
-                "triage_team": triage.team,
-                "triage_reason": triage.reason,
-            }
-        )
-
-        metadata.update(
-            self._build_slack_routing_metadata(
-                namespace=rollout.namespace,
-                deployment=rollout.deployment,
-                namespace_channel=rollout.slack_channel,
-            )
-        )
-
-        channel = rollout.slack_channel
-        rollout_ref = f"{rollout.namespace}/{rollout.deployment}#{rollout.generation}"
-
-        sent = self._slack.send_analysis(
-            channel=channel,
-            rollout_ref=rollout_ref,
-            analysis=analysis,
-            metadata=metadata,
-            rollout_id=rollout.id,
-        )
-
-        self._repo.update_notify_status(
-            rollout.id, NotifyStatus.SENT if sent else NotifyStatus.FAILED
-        )
-
         self._repo.append_analysis(
             rollout.id,
             reduced_context=reduced,
@@ -398,8 +901,116 @@ class AnalysisWorker:
             model_name=self._config.langchain_model_name,
         )
 
+        decision = classify_rollout_notification_decision(
+            trigger_context=trigger_context,
+            analysis=analysis,
+            config=self._config,
+        )
+        policy = self._rollout_notification_policy()
+        metadata, rollout_ref = self._build_rollout_notification_metadata(rollout, analysis)
+        slack_mode = str(
+            getattr(self._config, "rollout_transient_slack_mode", "actionable_only")
+        ).strip().lower()
+        should_send_now = decision.notify_immediately or slack_mode == "always"
+
+        if not should_send_now:
+            deferred_until = utcnow() + timedelta(
+                seconds=max(0, int(self._config.rollout_transient_persistence_window_seconds))
+            )
+            self._repo.set_rollout_notification_state(
+                rollout.id,
+                state="deferred",
+                classification=decision.classification,
+                reason=decision.reason,
+                deferred_until=deferred_until,
+                policy=policy,
+            )
+            return
+
+        sent = self._send_rollout_analysis_notification(
+            rollout,
+            analysis,
+            metadata,
+            rollout_ref,
+        )
+        self._repo.set_rollout_notification_state(
+            rollout.id,
+            state="sent" if sent else "failed",
+            classification=decision.classification,
+            reason=decision.reason,
+            notify_status=NotifyStatus.SENT if sent else NotifyStatus.FAILED,
+            policy=policy,
+        )
+
+    def _process_deferred_rollout_notifications(self):
+        cluster = getattr(self, "_cluster", self._config.k8s_cluster_name)
+        rollouts = self._repo.list_deferred_rollout_notifications_due(cluster)
+        for rollout in rollouts:
+            metadata = dict(rollout.metadata_json or {})
+            classification = metadata.get("notification_classification")
+            existing_reason = metadata.get("notification_decision_reason")
+
+            if self._is_deployment_healthy_now(rollout.deployment, rollout.namespace):
+                self._repo.set_rollout_notification_state(
+                    rollout.id,
+                    state="suppressed",
+                    classification=classification,
+                    reason="recovered before notification",
+                    recovered_before_notification=True,
+                    notify_status=NotifyStatus.SENT,
+                )
+                continue
+
+            if not rollout.analysis_id:
+                logger.warning(
+                    f"Deferred rollout {rollout.id} has no analysis_id; suppressing notification retry"
+                )
+                self._repo.set_rollout_notification_state(
+                    rollout.id,
+                    state="suppressed",
+                    classification=classification,
+                    reason="analysis record missing for deferred notification",
+                    notify_status=NotifyStatus.SENT,
+                )
+                continue
+
+            record = self._repo.get_analysis(rollout.analysis_id)
+            if not record or not record.analysis:
+                logger.warning(
+                    f"Deferred rollout {rollout.id} analysis record unavailable; suppressing notification retry"
+                )
+                self._repo.set_rollout_notification_state(
+                    rollout.id,
+                    state="suppressed",
+                    classification=classification,
+                    reason="analysis record unavailable for deferred notification",
+                    notify_status=NotifyStatus.SENT,
+                )
+                continue
+
+            analysis = Analysis.model_validate(record.analysis)
+            notification_metadata, rollout_ref = self._build_rollout_notification_metadata(
+                rollout,
+                analysis,
+            )
+            sent = self._send_rollout_analysis_notification(
+                rollout,
+                analysis,
+                notification_metadata,
+                rollout_ref,
+            )
+            self._repo.set_rollout_notification_state(
+                rollout.id,
+                state="sent" if sent else "failed",
+                classification=classification,
+                reason=existing_reason or "still actionable after quiet-first window",
+                notify_status=NotifyStatus.SENT if sent else NotifyStatus.FAILED,
+            )
+
+    # TODO(project-fyr): apply quiet-first actionable-only notification gating to
+    # alert-triggered investigations; deferred to keep this change rollout-only.
     def _process_alert_jobs(self):
-        jobs = self._alert_repo.get_pending_jobs()
+        jobs = self._alert_repo.get_pending_alert_jobs()
         for job in jobs:
             try:
                 logger.info(f"Processing alert job {job.id} for batch {job.alert_batch_id}")
@@ -469,6 +1080,8 @@ class AnalysisWorker:
 
         self._alert_repo.update_job_status(job.id, "done", completed_at=utcnow())
 
+    # TODO(project-fyr): align namespace-incident notifications with the same
+    # deferred/suppressed rollout semantics; deferred from rollout cleanup pass.
     def _process_namespace_jobs(self):
         """Process pending namespace investigation jobs."""
         jobs = self._alert_repo.get_pending_namespace_jobs()
@@ -571,6 +1184,7 @@ class WatcherService:
         self._config = config or settings
         self._engine = init_db(self._config.database_url)
         self._repo = RolloutRepo(self._engine, annotation_prefix=self._config.annotation_prefix)
+        self._case_ingestor = CaseIngestionService(self._engine)
 
     def start(self):
         try:
@@ -647,22 +1261,50 @@ class WatcherService:
         timeout = timedelta(seconds=self._config.rollout_timeout_seconds)
         core_v1 = client.CoreV1Api()
         while True:
-            now = utcnow()
-            rollouts = self._repo.list_active(cluster)
-            for rollout in rollouts:
-                try:
-                    dep = v1_apps.read_namespaced_deployment(rollout.deployment, rollout.namespace)
-                    reconcile_rollout(dep, rollout, now, self._repo, timeout, core_v1=core_v1)
-                except Exception as exc:
-                    logger.error(f"reconcile error: {exc}")
+            try:
+                now = utcnow()
+                rollouts = self._repo.list_active(cluster)
+                for rollout in rollouts:
+                    try:
+                        dep = v1_apps.read_namespaced_deployment(rollout.deployment, rollout.namespace)
+                        reconcile_rollout(
+                            dep,
+                            rollout,
+                            now,
+                            self._repo,
+                            timeout,
+                            core_v1=core_v1,
+                            case_ingestor=self._case_ingestor,
+                        )
+                    except ApiException as exc:
+                        if exc.status == 404:
+                            reason = (
+                                f"Deployment {rollout.namespace}/{rollout.deployment} no longer exists"
+                            )
+                            logger.info(
+                                f"Discarding stale rollout {rollout.id}: {reason}"
+                            )
+                            try:
+                                self._repo.discard_analysis(
+                                    rollout.id,
+                                    reason=reason,
+                                    mark_success=True,
+                                )
+                            except Exception as discard_exc:
+                                logger.error(
+                                    f"reconcile discard error for rollout {rollout.id}: {discard_exc}"
+                                )
+                            continue
+                        logger.error(f"reconcile error: {exc}")
+                    except Exception as exc:
+                        logger.error(f"reconcile error: {exc}")
+            except Exception as exc:
+                logger.error(f"reconcile loop error: {exc}")
             time.sleep(10)
 
     def _namespace_monitor_loop(self, cluster: str):
         """Periodically check for namespace-level issues."""
-        from .db import NamespaceIncidentRepo
-
         core_v1 = client.CoreV1Api()
-        incident_repo = NamespaceIncidentRepo(self._engine)
 
         logger.info(f"Starting namespace monitor loop (interval: {self._config.namespace_monitoring_interval_seconds}s)")
 
@@ -689,11 +1331,12 @@ class WatcherService:
                     # Check for stuck terminating
                     if ns.status and ns.status.phase == "Terminating":
                         self._check_terminating_stuck(
-                            cluster, ns_name, ns, incident_repo, team, slack_channel
+                            cluster, ns_name, ns, team=team, slack_channel=slack_channel
                         )
 
-                    # Check for quota violations, evictions, restarts
-                    # (will implement in next iteration)
+                    # TODO(project-fyr): route quota, eviction, and restart namespace
+                    # sensors into namespace cases; deferred while migrating the first
+                    # namespace signal off legacy namespace_incidents.
 
             except Exception as exc:
                 logger.error(f"namespace monitor error: {exc}")
@@ -701,19 +1344,9 @@ class WatcherService:
             time.sleep(self._config.namespace_monitoring_interval_seconds)
 
     def _check_terminating_stuck(
-        self, cluster: str, ns_name: str, ns, incident_repo, team, slack_channel
+        self, cluster: str, ns_name: str, ns, *, team, slack_channel
     ):
         """Check if namespace is stuck in Terminating state."""
-        from .models import NamespaceIncidentType, NamespaceIncidentStatus
-
-        # Check if there's already an active incident
-        existing = incident_repo.get_active_incident(
-            cluster, ns_name, NamespaceIncidentType.TERMINATING_STUCK.value
-        )
-
-        if existing:
-            # Already tracking this
-            return
 
         # Check how long it's been terminating
         deletion_timestamp = ns.metadata.deletion_timestamp
@@ -732,7 +1365,7 @@ class WatcherService:
             return
 
         # Check rate limits
-        if not self._check_rate_limits(cluster, ns_name, incident_repo):
+        if not self._check_rate_limits(cluster, ns_name):
             logger.warning(
                 f"Rate limit exceeded for namespace {ns_name}, skipping investigation"
             )
@@ -749,21 +1382,18 @@ class WatcherService:
             "finalizers": ns.metadata.finalizers or [],
         }
 
-        incident = incident_repo.create(
+        case, issue = self._case_ingestor.record_namespace_issue(
             cluster=cluster,
             namespace=ns_name,
-            incident_type=NamespaceIncidentType.TERMINATING_STUCK,
-            status=NamespaceIncidentStatus.ACTIVE,
-            started_at=now,
-            metadata_json=metadata,
+            issue_type="terminating_stuck",
+            metadata=metadata,
             team=team,
             slack_channel=slack_channel,
         )
 
-        logger.info(f"Created namespace incident {incident.id} for {ns_name}")
-
-        # Create investigation job
-        self._create_investigation_job(incident.id, "namespace")
+        logger.info(
+            f"Created namespace case {case.id} and namespace issue {issue.id} for {ns_name}"
+        )
 
     def _create_investigation_job(self, resource_id: int, job_type: str):
         """Create an investigation job for a rollout or namespace incident."""
@@ -791,24 +1421,12 @@ class WatcherService:
             s.refresh(job)
             logger.info(f"Created investigation job {job.id} for {job_type} {resource_id}")
 
-    def _check_rate_limits(self, cluster: str, namespace: str, incident_repo) -> bool:
+    def _check_rate_limits(self, cluster: str, namespace: str) -> bool:
         """Check if we're within rate limits for investigations."""
-        # Check namespace limit
-        namespace_count = incident_repo.count_investigations_in_window(
-            cluster, namespace, hours=1
-        )
-        logger.info(f"Rate limit check for {namespace}: {namespace_count} investigations in last hour (limit: {self._config.max_investigations_per_namespace_per_hour})")
-        if namespace_count >= self._config.max_investigations_per_namespace_per_hour:
-            return False
-
-        # Check cluster limit
-        cluster_count = incident_repo.count_investigations_in_window(
-            cluster, hours=1
-        )
-        logger.info(f"Rate limit check for cluster: {cluster_count} investigations in last hour (limit: {self._config.max_investigations_per_cluster_per_hour})")
-        if cluster_count >= self._config.max_investigations_per_cluster_per_hour:
-            return False
-
+        # TODO(project-fyr): move namespace monitor rate limiting onto namespace
+        # cases/issues/work_items so the limiter reflects the new control plane
+        # instead of the legacy namespace_incidents table.
+        del cluster, namespace
         return True
 
 
@@ -1024,7 +1642,7 @@ def analyze_pod_failures(pods: list) -> PodFailureSignals:
                 if reason == "Unschedulable":
                     signals.unschedulable_pods += 1
                     signals.permanent_failure_pods += 1  # Unschedulable is permanent
-                    signals.failure_reasons.append(f"{pod_name}: Unschedulable - {message[:100]}")
+                    signals.failure_reasons.append(f"{pod_name}: Unschedulable - {message}")
 
     return signals
 
@@ -1079,17 +1697,26 @@ ANNOTATION_TEAM = f"{_prefix}/team"
 ANNOTATION_PREFIX = f"{_prefix}/"
 ANNOTATION_REQUESTOR_EMAIL = f"{_prefix}/requestor-email"
 ANNOTATION_REQUESTOR_EMAIL_BARE = "requestor"  # Bare annotation (no prefix)
+ANNOTATION_REQUESTOR_EMAIL_METADATA = "metadata.annotations.requestor"
 ANNOTATION_ENABLED = f"{_prefix}/enabled"
 LABEL_OWNER_CHANNEL = f"{_prefix}/owner-channel"
+
+
+def extract_requestor_email_from_annotations(annotations: dict[str, str] | None) -> str:
+    annotations = annotations or {}
+    return (
+        annotations.get(ANNOTATION_REQUESTOR_EMAIL)
+        or annotations.get(ANNOTATION_REQUESTOR_EMAIL_BARE)
+        or annotations.get(ANNOTATION_REQUESTOR_EMAIL_METADATA)
+        or ""
+    ).strip()
 
 
 def parse_namespace_annotations(annotations: dict[str, str] | None) -> dict[str, Any]:
     annotations = annotations or {}
     namespace_specific = {k: v for k, v in annotations.items() if k.startswith(ANNOTATION_PREFIX)}
-    # Support both annotation styles: <prefix>/requestor-email and bare 'requestor'
-    requestor_email = (
-        annotations.get(ANNOTATION_REQUESTOR_EMAIL) or annotations.get(ANNOTATION_REQUESTOR_EMAIL_BARE) or ""
-    ).strip()
+    # Support requestor email annotation variants.
+    requestor_email = extract_requestor_email_from_annotations(annotations)
     if requestor_email:
         namespace_specific[ANNOTATION_REQUESTOR_EMAIL] = requestor_email
     metadata: dict[str, Any] = {}
@@ -1225,6 +1852,7 @@ def reconcile_rollout(
     repo: RolloutRepo,
     timeout: timedelta,
     core_v1: client.CoreV1Api | None = None,
+    case_ingestor: CaseIngestionService | None = None,
 ):
     phase = evaluate_deployment_phase(dep)
     started_at = rollout.started_at or now
@@ -1271,6 +1899,18 @@ def reconcile_rollout(
                 repo.update_status(rollout.id, RolloutStatus.FAILED, failed_at=now)
                 # Queue for immediate analysis
                 repo.queue_for_analysis(rollout.id)
+                if case_ingestor is not None:
+                    case_ingestor.record_rollout_failure(
+                        rollout=repo.get_by_id(rollout.id) or rollout,
+                        trigger_reason="permanent_failure_detected",
+                        trigger_context={
+                            "trigger_reason": "permanent_failure_detected",
+                            "failure_type": failure_type,
+                            "observed_failures": signals.failure_reasons[:5],
+                            "is_transient": False,
+                            "time_to_failure_seconds": time_to_failure,
+                        },
+                    )
                 return
             elif signals.transient_failure_pods > 0:
                 # Log transient failures that we're NOT failing early on
@@ -1307,6 +1947,18 @@ def reconcile_rollout(
         repo.update_status(rollout.id, RolloutStatus.FAILED, failed_at=now)
         # Queue for analysis
         repo.queue_for_analysis(rollout.id)
+        if case_ingestor is not None:
+            case_ingestor.record_rollout_failure(
+                rollout=repo.get_by_id(rollout.id) or rollout,
+                trigger_reason="deployment_progress_failed",
+                trigger_context={
+                    "trigger_reason": "deployment_progress_failed",
+                    "failure_type": "failed_progress",
+                    "observed_failures": ["Kubernetes reported Progressing=False condition"],
+                    "is_transient": False,
+                    "time_to_failure_seconds": time_to_failure,
+                },
+            )
         return
 
     if age > timeout:
@@ -1323,6 +1975,20 @@ def reconcile_rollout(
         repo.update_status(rollout.id, RolloutStatus.FAILED, failed_at=now)
         # Queue for analysis (timeout failure)
         repo.queue_for_analysis(rollout.id)
+        if case_ingestor is not None:
+            case_ingestor.record_rollout_failure(
+                rollout=repo.get_by_id(rollout.id) or rollout,
+                trigger_reason="rollout_timeout",
+                trigger_context={
+                    "trigger_reason": "rollout_timeout",
+                    "failure_type": "timeout",
+                    "observed_failures": [
+                        f"Rollout exceeded {timeout.total_seconds()}s timeout without completing"
+                    ],
+                    "is_transient": False,
+                    "time_to_failure_seconds": time_to_failure,
+                },
+            )
         return
 
     new_status = RolloutStatus.PENDING if phase == "PENDING" else RolloutStatus.ROLLING_OUT

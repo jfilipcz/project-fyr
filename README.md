@@ -334,7 +334,7 @@ The chart in `helm/project-fyr` deploys three services:
 - **Analyzer** – investigates failures using the LangChain agent
 - **Dashboard** – web UI for browsing rollouts and triggering investigations
 
-An optional MySQL dependency is available for dev/test clusters.
+A bundled Bitnami MySQL dependency is enabled by default for dev/demo clusters and can be disabled when using an external database.
 
 ### Quick start
 ```bash
@@ -350,17 +350,19 @@ Key values:
 - `analyzer.*` – replica count, command/args, scheduling hints for the analyzer.
 - `dashboard.*` – replica count, command/args, scheduling hints for the dashboard.
 - `ingress.*` – expose the dashboard externally with optional TLS.
-- `config.*` – populates the ConfigMap consumed by all services, covering every `PROJECT_FYR_*` setting.
+- `config.*` – non-sensitive `PROJECT_FYR_*` settings rendered into the shared ConfigMap.
+- `config.databaseUrl`, `config.slackBotToken`, `config.slack.appToken`, `config.slack.signingSecret`, `config.openaiApiKey`, `auth.sso.clientSecret`, `auth.local.jwtSecret`, and `auth.admin.password` – rendered into the chart-managed Secret.
+- `auth.*` – dashboard authentication is disabled by default; enable it only after supplying `auth.local.jwtSecret` or a `secrets.existingSecret`.
 - `serviceAccount.*` – RBAC identity (set `create=false` + `name` to reuse an existing SA).
 - `rbac.create` – automatically create ClusterRole and ClusterRoleBinding with required permissions (default: `true`).
 - `secrets.existingSecret` – reference to a Secret managed by External Secret Operator that injects sensitive `PROJECT_FYR_*` values.
 - `metrics.serviceMonitor.*` – enable Prometheus ServiceMonitor for metrics discovery (requires Prometheus Operator).
 
-Mount production secrets via external `Secret` objects and reference them using `envFrom`/`extraEnv` patches if desired—the chart keeps ConfigMap values simple for local testing. Namespace annotations control Slack routing/metadata.
+Mount production secrets via external `Secret` objects by setting `secrets.existingSecret`; inline sensitive values stay out of the ConfigMap and are rendered into a Kubernetes `Secret`. Namespace annotations control Slack routing/metadata.
 
 ### Optional MySQL dependency
 
-For development and demo clusters you can enable the bundled Bitnami MySQL chart:
+For development and demo clusters you can keep the bundled Bitnami MySQL chart enabled (the default) or override its values explicitly:
 
 ```bash
 cat <<'VALUES' > dev-values.yaml
@@ -380,7 +382,7 @@ VALUES
 helm upgrade --install project-fyr ./helm/project-fyr -f dev-values.yaml
 ```
 
-The dependency is disabled by default; in production you should continue pointing `PROJECT_FYR_DATABASE_URL` at your managed database and rely on `secrets.existingSecret` (ESO) to mount credentials.
+The dependency is enabled by default; in production you should usually disable it, point `PROJECT_FYR_DATABASE_URL` at your managed database, and rely on `secrets.existingSecret` (ESO) to mount credentials.
 
 ## Prometheus Metrics
 

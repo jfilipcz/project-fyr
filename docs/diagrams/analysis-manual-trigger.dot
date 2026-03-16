@@ -1,0 +1,18 @@
+digraph manual_trigger {
+  graph [rankdir=LR, fontsize=11, labelloc=t, label="Manual / On-Demand Analysis Trigger"];
+  node [shape=box, style="rounded,filled", fillcolor="#f9f2ff", color="#7c4bb2", fontname="Arial", fontsize=10];
+  edge [color="#4a4a4a", fontname="Arial", fontsize=9];
+
+  user [label="User action\nDashboard / Slack command / Slack thread"];
+  entry [label="Entry points\n- /api/investigate\n- /api/investigate/namespace/{ns}\n- /fyr ... investigate\n- thread follow-up"];
+  route [label="Direct call\nno DB queue involved"];
+  deploy [label="Deployment path\nInvestigatorAgent.investigate()"];
+  ns [label="Namespace path\nNamespaceAnalyzer.analyze_namespace()\n-> InvestigatorAgent"];
+  reply [label="Return API response\nor post Slack response"];
+
+  user -> entry -> route;
+  route -> deploy;
+  route -> ns;
+  deploy -> reply;
+  ns -> reply;
+}

@@ -2,9 +2,9 @@
 # Copyright (C) 2026 Project Fyr Contributors
 """Settings for the Project Fyr service."""
 
-from typing import Optional, List
-from pydantic import Field
-from pydantic_settings import BaseSettings
+from typing import Annotated, Any, Optional, List
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode
 
 
 class Settings(BaseSettings):
@@ -29,6 +29,41 @@ class Settings(BaseSettings):
     speculative_analysis_grace_seconds: int = Field(
         default=300,
         description="Seconds to wait before starting speculative analysis on ROLLING_OUT deployments (default: 5 minutes)"
+    )
+    analysis_healthy_recheck_delay_seconds: int = Field(
+        default=90,
+        description=(
+            "Seconds to wait before discarding a FAILED rollout that is already healthy "
+            "at analysis time (helps absorb transient/eventual consistency races)"
+        ),
+    )
+    rollout_transient_classification_mode: str = Field(
+        default="hybrid",
+        description="How rollout failures are classified for transient handling: allowlist, recovery_window, or hybrid",
+    )
+    rollout_transient_investigation_mode: str = Field(
+        default="immediate",
+        description="Whether transient-candidate rollout failures are investigated immediately or delayed",
+    )
+    rollout_transient_slack_mode: str = Field(
+        default="actionable_only",
+        description="How transient rollout investigations are allowed to notify Slack",
+    )
+    rollout_transient_persistence_window_seconds: int = Field(
+        default=300,
+        description="Quiet-first window before rollout-triggered Slack notification for transient/unknown failures",
+    )
+    rollout_transient_failure_types: Annotated[List[str], NoDecode] = Field(
+        default_factory=lambda: ["unschedulable", "transient_image_pull", "dependency_unready"],
+        description="Failure types treated as transient candidates for rollout notification policy",
+    )
+    rollout_transient_observation_patterns: Annotated[List[str], NoDecode] = Field(
+        default_factory=list,
+        description="Observation text patterns treated as transient candidates for rollout notification policy",
+    )
+    rollout_immediate_actionable_failure_types: Annotated[List[str], NoDecode] = Field(
+        default_factory=list,
+        description="Failure types that bypass the rollout quiet-first window and notify Slack immediately",
     )
 
     # Annotation prefix for Kubernetes labels/annotations
@@ -160,6 +195,16 @@ class Settings(BaseSettings):
         description="Show triage assignment block in Slack notifications"
     )
 
+    # Interactive chat guardrails
+    chat_policy_enabled: bool = Field(
+        default=True,
+        description="Enable allowlist/blocklist checks for /api/investigate/chat messages"
+    )
+    chat_output_redaction_enabled: bool = Field(
+        default=True,
+        description="Redact credential-like patterns from chat responses before returning to users"
+    )
+
     # Authentication
     auth_enabled: bool = Field(
         default=False,
@@ -239,6 +284,22 @@ class Settings(BaseSettings):
         default="/health,/metrics,/static,/api/webhook",
         description="Comma-separated list of path prefixes to exclude from authentication"
     )
+
+    @field_validator(
+        "rollout_transient_failure_types",
+        "rollout_transient_observation_patterns",
+        "rollout_immediate_actionable_failure_types",
+        mode="before",
+    )
+    @classmethod
+    def _parse_csv_list(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        if isinstance(value, (list, tuple, set)):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return value
 
     class Config:
         env_prefix = "PROJECT_FYR_"

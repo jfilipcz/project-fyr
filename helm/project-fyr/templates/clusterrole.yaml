@@ -32,4 +32,9 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list"]
+
+  # Read PVCs for storage diagnostics in namespace investigations
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
 {{- end }}

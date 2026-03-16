@@ -42,6 +42,37 @@ class NotifyStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class NamespaceCaseStatus(str, Enum):
+    OPEN = "OPEN"
+    QUIETING = "QUIETING"
+    CLOSED = "CLOSED"
+
+
+class IssueScope(str, Enum):
+    NAMESPACE = "namespace"
+    DEPLOYMENT = "deployment"
+
+
+class IssueStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    INVESTIGATING = "INVESTIGATING"
+    RESOLVED = "RESOLVED"
+    SUPPRESSED = "SUPPRESSED"
+
+
+class WorkItemKind(str, Enum):
+    ISSUE_INVESTIGATION = "issue_investigation"
+    CASE_RECHECK = "case_recheck"
+    CASE_NOTIFICATION = "case_notification"
+
+
+class WorkItemStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class RawContext(BaseModel):
     deployment: dict[str, Any]
     pods: list[dict[str, Any]]
