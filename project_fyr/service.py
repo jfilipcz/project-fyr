@@ -664,18 +664,18 @@ class AnalysisWorker:
 
     def _process_rollouts(self):
         rollouts = self._repo.list_failed(self._cluster)
-        
+
         if not rollouts:
             return
-        
+
         # Batch check: Get unique namespaces and check which still exist
         unique_namespaces = {r.namespace for r in rollouts}
         existing_namespaces = set()
         deleted_namespaces = set()
         terminating_namespaces = set()
-        
+
         logger.debug(f"Checking {len(unique_namespaces)} unique namespaces for {len(rollouts)} pending rollouts")
-        
+
         for ns in unique_namespaces:
             try:
                 namespace_obj = self._core_v1.read_namespace(ns)
@@ -694,7 +694,7 @@ class AnalysisWorker:
                     # and let the individual rollout processing handle it
                     logger.warning(f"Error checking namespace {ns}: {e}")
                     existing_namespaces.add(ns)
-        
+
         # Batch discard all rollouts from deleted/terminating namespaces
         namespaces_to_discard = deleted_namespaces | terminating_namespaces
         if namespaces_to_discard:
@@ -714,7 +714,7 @@ class AnalysisWorker:
                     )
                 except Exception as exc:
                     logger.error(f"Error discarding rollout {rollout.id}: {exc}")
-        
+
         # Process remaining rollouts from existing namespaces
         rollouts_to_process = [r for r in rollouts if r.namespace in existing_namespaces]
         logger.info(f"Processing {len(rollouts_to_process)} rollouts from existing namespaces")
@@ -732,7 +732,7 @@ class AnalysisWorker:
         investigation_mode = str(
             getattr(cfg, "rollout_transient_investigation_mode", "immediate")
         ).strip().lower()
-        
+
         for rollout in rollouts_to_process:
             try:
                 trigger_context = (rollout.metadata_json or {}).get("trigger_context") or {}
