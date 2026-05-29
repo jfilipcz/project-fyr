@@ -14,6 +14,10 @@ from .base import AuthProvider
 logger = logging.getLogger(__name__)
 
 
+def _request_path(request: Request) -> str:
+    return request.scope.get("path", "")
+
+
 class AuthenticationMiddleware(BaseHTTPMiddleware):
     """
     Middleware to authenticate requests using configured auth providers.
@@ -58,10 +62,12 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         """Process request and perform authentication check."""
 
+        request_path = _request_path(request)
+
         # Skip authentication for excluded paths
         for excluded_path in self.exclude_paths:
-            if request.url.path.startswith(excluded_path):
-                logger.debug(f"Skipping auth for excluded path: {request.url.path}")
+            if request_path.startswith(excluded_path):
+                logger.debug(f"Skipping auth for excluded path: {request_path}")
                 return await call_next(request)
 
         # Skip authentication for OPTIONS requests (CORS preflight)
@@ -72,14 +78,14 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         token = self._extract_token(request)
 
         if not token:
-            logger.debug(f"No token found for {request.url.path}")
+            logger.debug(f"No token found for {request_path}")
             return self._unauthorized_response(request)
 
         # Try to validate token with available providers
         user_info = await self._validate_with_providers(token)
 
         if not user_info:
-            logger.warning(f"Authentication failed for {request.url.path}")
+            logger.warning(f"Authentication failed for {request_path}")
             return self._unauthorized_response(request)
 
         # Add authenticated user info to request state
@@ -143,8 +149,10 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         For API requests, return JSON response.
         For browser requests, optionally redirect to login page.
         """
+        request_path = _request_path(request)
+
         # For API requests, return JSON
-        if request.url.path.startswith("/api/"):
+        if request_path.startswith("/api/"):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Authentication required"}
@@ -153,7 +161,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         # For browser requests, redirect to login page
         if self.redirect_to_login:
             # Don't redirect if already on login page to avoid loop
-            if not request.url.path.startswith("/login") and not request.url.path.startswith("/auth/"):
+            if not request_path.startswith("/login") and not request_path.startswith("/auth/"):
                 return RedirectResponse(url="/login", status_code=302)
 
         return JSONResponse(

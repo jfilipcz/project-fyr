@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException
 from starlette.requests import Request
 
-from project_fyr.auth.middleware import AuthenticationMiddleware
+from project_fyr.auth.middleware import AuthenticationMiddleware, _request_path
 
 
 class _DummyProvider:
@@ -70,3 +71,12 @@ def test_validate_with_providers_returns_none_when_all_providers_fail() -> None:
     result = asyncio.run(middleware._validate_with_providers("candidate-token"))
 
     assert result is None
+
+
+def test_request_path_uses_asgi_scope_path_instead_of_url_path() -> None:
+    request = SimpleNamespace(
+        scope={"path": "/protected"},
+        url=SimpleNamespace(path="/login"),
+    )
+
+    assert _request_path(request) == "/protected"
